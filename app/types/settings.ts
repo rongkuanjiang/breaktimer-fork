@@ -54,6 +54,7 @@ export interface Settings {
   breakMessages?: string[];
   breakMessagesMode?: BreakMessagesMode; // RANDOM (default) or SEQUENTIAL
   breakMessagesNextIndex?: number; // internal pointer for sequential mode
+  breakMessagesOrder?: number[]; // stored shuffle order for sequential mode
   backgroundColor: string;
   textColor: string;
   showBackdrop: boolean;
@@ -118,6 +119,7 @@ export const defaultSettings: Settings = {
   ],
   breakMessagesMode: BreakMessagesMode.Random,
   breakMessagesNextIndex: 0,
+  breakMessagesOrder: [0],
   backgroundColor: "#16a085",
   textColor: "#ffffff",
   showBackdrop: true,

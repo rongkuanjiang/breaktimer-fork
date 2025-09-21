@@ -25,6 +25,34 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+function generateShuffledIndexes(length: number): number[] {
+  const indexes = Array.from({ length }, (_, i) => i);
+  for (let i = indexes.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indexes[i], indexes[j]] = [indexes[j], indexes[i]];
+  }
+  return indexes;
+}
+
+function sanitizeOrder(
+  order: number[] | undefined,
+  length: number,
+): number[] | null {
+  if (!Array.isArray(order) || order.length !== length) {
+    return null;
+  }
+
+  const seen = new Set<number>();
+  for (const value of order) {
+    if (!Number.isInteger(value) || value < 0 || value >= length || seen.has(value)) {
+      return null;
+    }
+    seen.add(value);
+  }
+
+  return order.slice();
+}
+
 let powerMonitor: PowerMonitor;
 let breakTime: BreakTime = null;
 let havingBreak = false;
@@ -210,16 +238,38 @@ function doBreak(): void {
   // Choose a break message according to mode
   if (Array.isArray(settings.breakMessages) && settings.breakMessages.length) {
     if (settings.breakMessagesMode === BreakMessagesMode.Sequential) {
-      const idx = settings.breakMessagesNextIndex || 0;
-      currentBreakMessage = settings.breakMessages[idx % settings.breakMessages.length];
-      // Persist next index (wrap around). We update settings silently without resetting breaks
+      const totalMessages = settings.breakMessages.length;
+      const idxRaw =
+        typeof settings.breakMessagesNextIndex === "number"
+          ? settings.breakMessagesNextIndex
+          : 0;
+      const currentIndex = ((idxRaw % totalMessages) + totalMessages) % totalMessages;
+
+      let order = sanitizeOrder(settings.breakMessagesOrder, totalMessages);
+      if (!order) {
+        order = generateShuffledIndexes(totalMessages);
+      }
+
+      const messageIndex = order[currentIndex] ?? 0;
+      currentBreakMessage = settings.breakMessages[messageIndex];
+
+      let nextIndex = currentIndex + 1;
+      if (nextIndex >= totalMessages) {
+        nextIndex = 0;
+        order = generateShuffledIndexes(totalMessages);
+      }
+
+      // Persist next index and current order. We update settings silently without resetting breaks
       try {
-        const newIndex = (idx + 1) % settings.breakMessages.length;
-        const updated: Settings = { ...settings, breakMessagesNextIndex: newIndex };
+        const updated: Settings = {
+          ...settings,
+          breakMessagesNextIndex: nextIndex,
+          breakMessagesOrder: order,
+        };
         const { setSettings } = require("./store");
         setSettings(updated, false);
       } catch (err) {
-        log.warn("Failed to persist breakMessagesNextIndex", err);
+        log.warn("Failed to persist break message rotation state", err);
       }
     } else {
       // Random

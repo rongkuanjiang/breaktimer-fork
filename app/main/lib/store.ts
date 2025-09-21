@@ -141,6 +141,15 @@ const migrations: Migration[] = [
       return settings;
     },
   },
+  {
+    version: 5,
+    migrate: (settings: any) => {
+      if (!Array.isArray(settings.breakMessagesOrder)) {
+        settings.breakMessagesOrder = [];
+      }
+      return settings;
+    },
+  },
 ];
 
 const store = new Store({

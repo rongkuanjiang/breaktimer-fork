@@ -165,7 +165,7 @@ export default function Break() {
         />
       )}
       <motion.div
-        className="flex flex-col justify-center items-center relative p-6 text-balance focus:outline-none w-[500px] rounded-xl"
+        className="flex flex-col justify-center items-center relative p-6 text-balance focus:outline-none w-[500px] max-h-[90vh] overflow-hidden rounded-xl"
         animate={{
           opacity: closing ? 0 : 1,
           y: closing ? -20 : 0,

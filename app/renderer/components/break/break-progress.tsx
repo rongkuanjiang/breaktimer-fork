@@ -155,9 +155,9 @@ export function BreakProgress({
       </div>
 
       {/* Scrollable message + progress container */}
-      <div className="flex flex-col min-h-0 flex-1">
+      <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
         <div
-          className="text-lg opacity-80 font-medium whitespace-pre-line overflow-y-auto pr-2 custom-scroll flex-1"
+          className="text-lg opacity-80 font-medium whitespace-pre-line overflow-y-auto pr-2 custom-scroll flex-1 max-h-[60vh]"
           style={{ color: textColor }}
         >
           {breakMessage}
