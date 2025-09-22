@@ -79,6 +79,7 @@ export default function SettingsEl() {
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ): void => {
     // Allow passing arrays via synthetic events (for breakMessages)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const value = (e.target as any).value;
     setSettingsDraft({
       ...settingsDraft,

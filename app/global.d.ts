@@ -3,7 +3,7 @@ declare const ipcRenderer: {
   invokeGetAllowPostpone: () => Promise<boolean>;
   invokeGetBreakLength: () => Promise<number>;
   invokeGetSettings: () => Promise<unknown>;
-  invokeGetCurrentBreakMessage: () => Promise<string | null>;
+  invokeGetCurrentBreakMessage: () => Promise<import("./types/settings").BreakMessageContent | null>;
   invokeEndSound: (type: string, volume?: number) => Promise<unknown>;
   invokeStartSound: (type: string, volume?: number) => Promise<unknown>;
   invokeSetSettings: (settings: unknown) => Promise<void>;

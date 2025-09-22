@@ -1,13 +1,15 @@
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
-import { Settings, SoundType } from "../../types/settings";
+import { SoundType, normalizeBreakMessage } from "../../types/settings";
+import type { BreakMessageContent, Settings } from "../../types/settings";
 import { BreakNotification } from "./break/break-notification";
 import { BreakProgress } from "./break/break-progress";
 import { createDarkerRgba } from "./break/utils";
 
 export default function Break() {
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [currentBreakMessage, setCurrentBreakMessage] = useState<string | null>(null);
+  const [currentBreakMessage, setCurrentBreakMessage] =
+    useState<BreakMessageContent | null>(null);
   const [countingDown, setCountingDown] = useState(true);
   const [allowPostpone, setAllowPostpone] = useState<boolean | null>(null);
   const [timeSinceLastBreak, setTimeSinceLastBreak] = useState<number | null>(
@@ -29,9 +31,15 @@ export default function Break() {
           ipcRenderer.invokeWasStartedFromTray(),
         ]);
 
-  setAllowPostpone(allowPostpone);
-  setSettings(settings);
-  setCurrentBreakMessage(await ipcRenderer.invokeGetCurrentBreakMessage());
+      setAllowPostpone(allowPostpone);
+      setSettings(settings);
+      const currentMessage =
+        (await ipcRenderer.invokeGetCurrentBreakMessage()) as
+          | BreakMessageContent
+          | null;
+      setCurrentBreakMessage(
+        currentMessage ? normalizeBreakMessage(currentMessage) : null,
+      );
       setTimeSinceLastBreak(timeSince);
 
       // Skip the countdown if immediately start breaks is enabled or started from tray
@@ -117,6 +125,10 @@ export default function Break() {
     return null;
   }
 
+  const fallbackBreakMessage = normalizeBreakMessage(settings.breakMessage);
+  const breakMessageForDisplay =
+    currentBreakMessage ?? fallbackBreakMessage;
+
   if (countingDown) {
     return (
       <div
@@ -165,7 +177,7 @@ export default function Break() {
         />
       )}
       <motion.div
-        className="flex flex-col justify-center items-center relative p-6 text-balance focus:outline-none w-[500px] max-h-[90vh] overflow-hidden rounded-xl"
+        className="flex flex-col justify-center items-center relative p-6 text-balance focus:outline-none w-[960px] max-w-[95vw] max-h-[90vh] overflow-hidden rounded-xl"
         animate={{
           opacity: closing ? 0 : 1,
           y: closing ? -20 : 0,
@@ -182,7 +194,7 @@ export default function Break() {
       >
         {ready && (
           <BreakProgress
-            breakMessage={currentBreakMessage || settings.breakMessage}
+            breakMessage={breakMessageForDisplay}
             breakTitle={settings.breakTitle}
             endBreakEnabled={settings.endBreakEnabled}
             onEndBreak={handleEndBreak}

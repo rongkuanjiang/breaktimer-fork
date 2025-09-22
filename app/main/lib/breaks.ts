@@ -9,6 +9,9 @@ import {
   Settings,
   SoundType,
   BreakMessagesMode,
+  BreakMessageContent,
+  normalizeBreakMessage,
+  normalizeBreakMessages,
 } from "../../types/settings";
 import { sendIpc } from "./ipc";
 import { showNotification } from "./notifications";
@@ -65,7 +68,7 @@ let startedFromTray = false;
 let lastCompletedBreakTime: Date = new Date();
 let currentBreakStartTime: Date | null = null;
 let hasSkippedOrSnoozedSinceLastBreak = false;
-let currentBreakMessage: string | null = null;
+let currentBreakMessage: BreakMessageContent | null = null;
 
 export function getBreakTime(): BreakTime {
   return breakTime;
@@ -236,9 +239,10 @@ function doBreak(): void {
 
   const settings: Settings = getSettings();
   // Choose a break message according to mode
-  if (Array.isArray(settings.breakMessages) && settings.breakMessages.length) {
+  const availableMessages = normalizeBreakMessages(settings.breakMessages);
+  if (availableMessages.length > 0) {
     if (settings.breakMessagesMode === BreakMessagesMode.Sequential) {
-      const totalMessages = settings.breakMessages.length;
+      const totalMessages = availableMessages.length;
       const idxRaw =
         typeof settings.breakMessagesNextIndex === "number"
           ? settings.breakMessagesNextIndex
@@ -251,7 +255,7 @@ function doBreak(): void {
       }
 
       const messageIndex = order[currentIndex] ?? 0;
-      currentBreakMessage = settings.breakMessages[messageIndex];
+      currentBreakMessage = availableMessages[messageIndex] ?? availableMessages[0];
 
       let nextIndex = currentIndex + 1;
       if (nextIndex >= totalMessages) {
@@ -265,6 +269,7 @@ function doBreak(): void {
           ...settings,
           breakMessagesNextIndex: nextIndex,
           breakMessagesOrder: order,
+          breakMessages: availableMessages,
         };
         const { setSettings } = require("./store");
         setSettings(updated, false);
@@ -273,16 +278,19 @@ function doBreak(): void {
       }
     } else {
       // Random
-      const idx = Math.floor(Math.random() * settings.breakMessages.length);
-      currentBreakMessage = settings.breakMessages[idx];
+      const idx = Math.floor(Math.random() * availableMessages.length);
+      currentBreakMessage = availableMessages[idx];
     }
   } else {
-    currentBreakMessage = settings.breakMessage;
+    currentBreakMessage = normalizeBreakMessage(settings.breakMessage);
   }
   log.info(`Break started [type=${settings.notificationType}]`);
 
   if (settings.notificationType === NotificationType.Notification) {
-    const messageToShow = currentBreakMessage || settings.breakMessage;
+    const messageToShow =
+      currentBreakMessage && currentBreakMessage.text.trim().length > 0
+        ? currentBreakMessage.text
+        : settings.breakMessage;
     showNotification("Time for a break!", stripHtml(messageToShow));
     if (settings.soundType !== SoundType.None) {
       sendIpc(
@@ -478,6 +486,15 @@ export function initBreaks(): void {
 }
 
 // Helper to expose the current break message to renderers (polled via settings get)
-export function getCurrentBreakMessage(): string | null {
-  return currentBreakMessage;
+export function getCurrentBreakMessage(): BreakMessageContent | null {
+  if (!currentBreakMessage) {
+    return null;
+  }
+
+  return {
+    text: currentBreakMessage.text,
+    attachments: currentBreakMessage.attachments.map((attachment) => ({
+      ...attachment,
+    })),
+  };
 }

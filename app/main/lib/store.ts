@@ -1,5 +1,5 @@
 import Store from "electron-store";
-import { defaultSettings, Settings } from "../../types/settings";
+import { defaultSettings, Settings, normalizeBreakMessages } from "../../types/settings";
 import { setAutoLauch } from "./auto-launch";
 import { initBreaks } from "./breaks";
 
@@ -101,6 +101,7 @@ const migrations: Migration[] = [
   },
   {
     version: 3,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     migrate: (settings: any) => {
       // Introduce breakMessages array; migrate existing breakMessage if present
       if (!settings.breakMessages) {
@@ -117,6 +118,7 @@ const migrations: Migration[] = [
   },
   {
     version: 3,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     migrate: (settings: any) => {
       // Initialize breakMessages array if not present
       if (!settings.breakMessages) {
@@ -131,6 +133,7 @@ const migrations: Migration[] = [
   },
   {
     version: 4,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     migrate: (settings: any) => {
       if (!settings.breakMessagesMode) {
         settings.breakMessagesMode = "RANDOM";
@@ -143,10 +146,29 @@ const migrations: Migration[] = [
   },
   {
     version: 5,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     migrate: (settings: any) => {
       if (!Array.isArray(settings.breakMessagesOrder)) {
         settings.breakMessagesOrder = [];
       }
+      return settings;
+    },
+  },
+
+  {
+    version: 6,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    migrate: (settings: any) => {
+      const messages = normalizeBreakMessages(settings.breakMessages);
+
+      if (messages.length > 0) {
+        settings.breakMessages = messages;
+      } else if (typeof settings.breakMessage === "string" && settings.breakMessage.length > 0) {
+        settings.breakMessages = normalizeBreakMessages([settings.breakMessage]);
+      } else {
+        settings.breakMessages = [];
+      }
+
       return settings;
     },
   },
@@ -205,7 +227,9 @@ function migrateSettings(settings: any): Settings {
 export function getSettings(): Settings {
   const settings = store.get("settings");
   const migratedSettings = migrateSettings(settings);
-  return Object.assign({}, defaultSettings, migratedSettings) as Settings;
+  const merged = Object.assign({}, defaultSettings, migratedSettings) as Settings;
+  merged.breakMessages = normalizeBreakMessages(merged.breakMessages);
+  return merged;
 }
 
 export function setSettings(settings: Settings, resetBreaks = true): void {
@@ -215,7 +239,12 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
     setAutoLauch(settings.autoLaunch);
   }
 
-  store.set({ settings });
+  const nextSettings: Settings = {
+    ...settings,
+    breakMessages: normalizeBreakMessages(settings.breakMessages),
+  };
+
+  store.set({ settings: nextSettings });
 
   if (resetBreaks) {
     initBreaks();

@@ -1,3 +1,4 @@
+import { useCallback, useState, type ChangeEvent, type ClipboardEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -9,7 +10,17 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { NotificationType, Settings, BreakMessagesMode } from "../../../types/settings";
+import { X } from "lucide-react";
+import {
+  NotificationType,
+  BreakMessagesMode,
+  normalizeBreakMessage,
+} from "../../../types/settings";
+import type {
+  Settings,
+  BreakMessageContent,
+  BreakMessageAttachment,
+} from "../../../types/settings";
 import SettingsCard from "./settings-card";
 import TimeInput from "./time-input";
 
@@ -24,6 +35,183 @@ interface BreaksCardProps {
   onSwitchChange: (field: string, checked: boolean) => void;
 }
 
+interface BreakMessageEditorProps {
+  value: BreakMessageContent;
+  disabled: boolean;
+  onChange: (value: BreakMessageContent) => void;
+  onRemove: () => void;
+  index: number;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Could not read file contents"));
+      }
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Could not read file contents"));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function createAttachmentId(): string {
+  return "att-" + Math.random().toString(36).slice(2, 10);
+}
+
+
+function createSyntheticInputEvent<T>(value: T): ChangeEvent<HTMLInputElement> {
+  return { target: { value } } as unknown as ChangeEvent<HTMLInputElement>;
+}
+
+function BreakMessageEditor({
+  value,
+  disabled,
+  onChange,
+  onRemove,
+  index,
+}: BreakMessageEditorProps) {
+
+  const [isProcessingPaste, setIsProcessingPaste] = useState(false);
+
+  const handleTextChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
+      onChange(
+        normalizeBreakMessage({
+          ...value,
+          text: event.target.value,
+        }),
+      );
+    },
+    [onChange, value],
+  );
+
+  const handleRemoveAttachment = useCallback(
+    (id: string) => {
+      const next = normalizeBreakMessage({
+        ...value,
+        attachments: value.attachments.filter((attachment) => attachment.id !== id),
+      });
+      onChange(next);
+    },
+    [onChange, value],
+  );
+
+  const handlePaste = useCallback(
+    async (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const files = items
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => !!file && file.type.startsWith("image/"));
+
+      if (files.length === 0) {
+        return;
+      }
+
+      const textData = event.clipboardData?.getData("text/plain");
+      if (!textData) {
+        event.preventDefault();
+      }
+
+      setIsProcessingPaste(true);
+      try {
+        const attachments: BreakMessageAttachment[] = [];
+        for (const file of files) {
+          try {
+            const dataUrl = await readFileAsDataUrl(file);
+            attachments.push({
+              id: createAttachmentId(),
+              type: "image",
+              dataUrl,
+              mimeType: file.type,
+              name: file.name,
+            });
+          } catch (error) {
+            console.error("Failed to read pasted image", error);
+          }
+        }
+
+        if (attachments.length > 0) {
+          const next = normalizeBreakMessage({
+            ...value,
+            attachments: [...value.attachments, ...attachments],
+          });
+          onChange(next);
+        }
+      } finally {
+        setIsProcessingPaste(false);
+      }
+    },
+    [onChange, value],
+  );
+
+  return (
+    <div className="rounded-md border p-3 space-y-3 bg-muted/10">
+      <div className="flex items-center justify-between">
+        <Label className="text-sm font-medium">Message {index + 1}</Label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onRemove}
+          disabled={disabled}
+        >
+          Remove
+        </Button>
+      </div>
+      <Textarea
+        className="text-sm resize-none flex-1"
+        rows={4}
+        value={value.text}
+        onChange={handleTextChange}
+        onPaste={handlePaste}
+        disabled={disabled}
+        placeholder="Rest your eyes..."
+      />
+      <p className="text-xs text-muted-foreground">Paste images directly into the message area to attach them.</p>
+      {isProcessingPaste && (
+        <p className="text-xs text-muted-foreground">Attaching image...</p>
+      )}
+      {value.attachments.length > 0 && (
+        <div className="flex flex-wrap gap-3">
+          {value.attachments.map((attachment) => (
+            <figure
+              key={attachment.id}
+              className="relative rounded-md border bg-background p-2"
+            >
+              <img
+                src={attachment.dataUrl}
+                alt={attachment.name || "Break message attachment"}
+                className="max-h-32 max-w-[16rem] rounded-sm object-contain"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="absolute -top-2 -right-2 h-6 w-6"
+                onClick={() => handleRemoveAttachment(attachment.id)}
+                disabled={disabled}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+              {attachment.name && (
+                <figcaption className="mt-1 truncate text-xs text-muted-foreground">
+                  {attachment.name}
+                </figcaption>
+              )}
+            </figure>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function BreaksCard({
   settingsDraft,
   onNotificationTypeChange,
@@ -31,6 +219,16 @@ export default function BreaksCard({
   onTextChange,
   onSwitchChange,
 }: BreaksCardProps) {
+  const breakMessages: BreakMessageContent[] =
+    settingsDraft.breakMessages ?? [];
+
+  const handleMessagesChange = useCallback(
+    (messages: BreakMessageContent[]) => {
+      onTextChange("breakMessages", createSyntheticInputEvent(messages));
+    },
+    [onTextChange],
+  );
+
   return (
     <SettingsCard
       title="Breaks"
@@ -109,7 +307,9 @@ export default function BreaksCard({
           <Label className="text-sm font-medium">Message Order</Label>
           <Select
             value={settingsDraft.breakMessagesMode || BreakMessagesMode.Random}
-            onValueChange={(val) => onTextChange("breakMessagesMode", { target: { value: val } } as any)}
+            onValueChange={(val) =>
+              onTextChange("breakMessagesMode", createSyntheticInputEvent(val))
+            }
             disabled={!settingsDraft.breaksEnabled}
           >
             <SelectTrigger style={{ width: 180 }}>
@@ -124,59 +324,48 @@ export default function BreaksCard({
         <div className="space-y-2">
           <Label className="text-sm font-medium">Messages</Label>
           <p className="text-xs text-muted-foreground">
-            Add one or more messages. A random one is shown each break. Leave blank to use the single message field below.
+            Add one or more messages. Paste images directly into a message to attach them.
+            Markdown-style bullets (&quot;*&quot;, &quot;1.&quot;, &quot;a.&quot;) are formatted automatically during breaks.
           </p>
           <div className="space-y-3">
-            {(settingsDraft.breakMessages || []).map((msg, idx) => (
-              <div key={idx} className="flex items-start gap-2">
-                <Textarea
-                  className="text-sm resize-none flex-1"
-                  rows={3}
-                  value={msg}
-                  onChange={(e) => {
-                    const newMessages = [...(settingsDraft.breakMessages || [])];
-                    newMessages[idx] = e.target.value;
-                    onTextChange("breakMessages", { target: { value: newMessages } } as any);
-                  }}
-                  disabled={!settingsDraft.breaksEnabled}
-                  placeholder="Rest your eyes..."
-                />
-                <Button
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={!settingsDraft.breaksEnabled}
-                  onClick={() => {
-                    const newMessages = [...(settingsDraft.breakMessages || [])];
-                    newMessages.splice(idx, 1);
-                    onTextChange("breakMessages", { target: { value: newMessages } } as any);
-                  }}
-                >
-                  Remove
-                </Button>
-              </div>
+            {breakMessages.map((msg, idx) => (
+              <BreakMessageEditor
+                key={`${idx}-${msg.text.slice(0, 16)}`}
+                value={msg}
+                index={idx}
+                disabled={!settingsDraft.breaksEnabled}
+                onChange={(updated) => {
+                  const next = [...breakMessages];
+                  next[idx] = updated;
+                  handleMessagesChange(next);
+                }}
+                onRemove={() => {
+                  const next = [...breakMessages];
+                  next.splice(idx, 1);
+                  handleMessagesChange(next);
+                }}
+              />
             ))}
             <div className="flex gap-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  const newMessages = [
-                    ...(settingsDraft.breakMessages || []),
-                    settingsDraft.breakMessage || "",
+                  const next = [
+                    ...breakMessages,
+                    normalizeBreakMessage(settingsDraft.breakMessage || ""),
                   ];
-                  onTextChange("breakMessages", { target: { value: newMessages } } as any);
+                  handleMessagesChange(next);
                 }}
                 disabled={!settingsDraft.breaksEnabled}
               >
                 Add Message
               </Button>
-              {settingsDraft.breakMessages && settingsDraft.breakMessages.length > 0 && (
+              {breakMessages.length > 0 && (
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => {
-                    onTextChange("breakMessages", { target: { value: [] } } as any);
-                  }}
+                  onClick={() => handleMessagesChange([])}
                   disabled={!settingsDraft.breaksEnabled}
                 >
                   Clear All

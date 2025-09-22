@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, IpcMainInvokeEvent, screen } from "electron";
 import log from "electron-log";
 import { IpcChannel } from "../../types/ipc";
-import { Settings, SoundType } from "../../types/settings";
+import type { BreakMessageContent, Settings, SoundType } from "../../types/settings";
 import {
   completeBreakTracking,
   getAllowPostpone,
@@ -78,7 +78,7 @@ ipcMain.handle(IpcChannel.SettingsGet, (): Settings => {
   return getSettings();
 });
 
-ipcMain.handle("CURRENT_BREAK_MESSAGE_GET", (): string | null => {
+ipcMain.handle("CURRENT_BREAK_MESSAGE_GET", (): BreakMessageContent | null => {
   log.info("CURRENT_BREAK_MESSAGE_GET");
   return getCurrentBreakMessage();
 });
