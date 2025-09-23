@@ -1,7 +1,20 @@
 import Store from "electron-store";
-import { defaultSettings, Settings, normalizeBreakMessages } from "../../types/settings";
+import log from "electron-log";
+import {
+  defaultSettings,
+  Settings,
+  normalizeBreakMessages,
+  BreakMessageAttachment,
+  BreakMessageContent,
+  MessageColorEffect,
+} from "../../types/settings";
 import { setAutoLauch } from "./auto-launch";
 import { initBreaks } from "./breaks";
+import {
+  attachmentExists,
+  deleteAttachment,
+  saveAttachmentFromDataUrl,
+} from "./attachments";
 
 interface Migration {
   version: number;
@@ -172,7 +185,102 @@ const migrations: Migration[] = [
       return settings;
     },
   },
+  {
+    version: 7,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    migrate: (settings: any) => {
+      if (Array.isArray(settings.breakMessages)) {
+        settings.breakMessages = persistAttachments(settings.breakMessages);
+      }
+      return settings;
+    },
+  },
+  {
+    version: 8,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    migrate: (settings: any) => {
+      if (!settings.titleTextColor) {
+        settings.titleTextColor = settings.textColor || defaultSettings.textColor;
+      }
+      if (!settings.messageTextColor) {
+        settings.messageTextColor = settings.textColor || defaultSettings.textColor;
+      }
+      if (!settings.messageColorEffect) {
+        settings.messageColorEffect = MessageColorEffect.Static;
+      }
+      return settings;
+    },
+  },
 ];
+
+function collectAttachmentIds(messages: BreakMessageContent[] | undefined): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(messages)) {
+    return ids;
+  }
+
+  for (const message of messages) {
+    for (const attachment of message.attachments || []) {
+      if (attachment && attachment.type === "image" && attachment.id) {
+        ids.add(attachment.id);
+      }
+    }
+  }
+
+  return ids;
+}
+
+function persistAttachments(
+  messages: BreakMessageContent[] | undefined,
+): BreakMessageContent[] {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages.map((message) => {
+    const persisted: BreakMessageAttachment[] = [];
+
+    for (const attachment of message.attachments || []) {
+      if (!attachment || attachment.type !== "image") {
+        continue;
+      }
+
+      if (attachment.dataUrl) {
+        try {
+          const saved = saveAttachmentFromDataUrl(attachment.dataUrl, {
+            mimeType: attachment.mimeType,
+            name: attachment.name,
+            sizeBytes: attachment.sizeBytes,
+          });
+          persisted.push(saved);
+        } catch (error) {
+          log.warn("Dropping attachment that failed to persist", error);
+        }
+        continue;
+      }
+
+      if (attachment.uri && attachment.id) {
+        if (attachmentExists(attachment.id)) {
+          persisted.push({
+            id: attachment.id,
+            type: "image",
+            uri: attachment.uri,
+            mimeType: attachment.mimeType,
+            name: attachment.name,
+            sizeBytes: attachment.sizeBytes,
+          });
+        } else {
+          log.warn("Skipping attachment with missing file", attachment.id);
+        }
+      }
+    }
+
+    return {
+      ...message,
+      attachments: persisted,
+    };
+  });
+}
 
 const store = new Store({
   defaults: {
@@ -239,10 +347,30 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
     setAutoLauch(settings.autoLaunch);
   }
 
+  const normalizedMessages = normalizeBreakMessages(settings.breakMessages);
+  const persistedMessages = persistAttachments(normalizedMessages);
+
+  const titleTextColor = settings.titleTextColor || settings.textColor;
+  const messageTextColor = settings.messageTextColor || settings.textColor;
+  const messageColorEffect =
+    settings.messageColorEffect || MessageColorEffect.Static;
+
   const nextSettings: Settings = {
     ...settings,
-    breakMessages: normalizeBreakMessages(settings.breakMessages),
+    titleTextColor,
+    messageTextColor,
+    messageColorEffect,
+    breakMessages: persistedMessages,
   };
+
+  const currentAttachmentIds = collectAttachmentIds(currentSettings.breakMessages);
+  const nextAttachmentIds = collectAttachmentIds(persistedMessages);
+
+  for (const id of currentAttachmentIds) {
+    if (!nextAttachmentIds.has(id)) {
+      deleteAttachment(id);
+    }
+  }
 
   store.set({ settings: nextSettings });
 

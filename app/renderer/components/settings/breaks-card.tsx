@@ -15,6 +15,7 @@ import {
   NotificationType,
   BreakMessagesMode,
   normalizeBreakMessage,
+  MAX_BREAK_ATTACHMENT_BYTES,
 } from "../../../types/settings";
 import type {
   Settings,
@@ -22,6 +23,7 @@ import type {
   BreakMessageAttachment,
 } from "../../../types/settings";
 import SettingsCard from "./settings-card";
+import { toast } from "../../toaster";
 import TimeInput from "./time-input";
 
 interface BreaksCardProps {
@@ -58,10 +60,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
-}
-
-function createAttachmentId(): string {
-  return "att-" + Math.random().toString(36).slice(2, 10);
 }
 
 
@@ -121,19 +119,31 @@ function BreakMessageEditor({
       setIsProcessingPaste(true);
       try {
         const attachments: BreakMessageAttachment[] = [];
+        let rejectedLargeFile = false;
+
         for (const file of files) {
+          if (file.size > MAX_BREAK_ATTACHMENT_BYTES) {
+            rejectedLargeFile = true;
+            continue;
+          }
+
           try {
             const dataUrl = await readFileAsDataUrl(file);
-            attachments.push({
-              id: createAttachmentId(),
-              type: "image",
+            const saved = (await ipcRenderer.invokeSaveAttachment({
               dataUrl,
               mimeType: file.type,
               name: file.name,
-            });
+              sizeBytes: file.size,
+            })) as BreakMessageAttachment;
+            attachments.push(saved);
           } catch (error) {
-            console.error("Failed to read pasted image", error);
+            console.error("Failed to persist pasted image", error);
+            toast("Couldn't save attachment. Try a smaller file.");
           }
+        }
+
+        if (rejectedLargeFile) {
+          toast("Images must be 4 MB or smaller.");
         }
 
         if (attachments.length > 0) {
@@ -185,7 +195,7 @@ function BreakMessageEditor({
               className="relative rounded-md border bg-background p-2"
             >
               <img
-                src={attachment.dataUrl}
+                src={attachment.uri}
                 alt={attachment.name || "Break message attachment"}
                 className="max-h-32 max-w-[16rem] rounded-sm object-contain"
               />
@@ -330,7 +340,7 @@ export default function BreaksCard({
           <div className="space-y-3">
             {breakMessages.map((msg, idx) => (
               <BreakMessageEditor
-                key={`${idx}-${msg.text.slice(0, 16)}`}
+                key={idx}
                 value={msg}
                 index={idx}
                 disabled={!settingsDraft.breaksEnabled}

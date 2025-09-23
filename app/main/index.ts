@@ -3,6 +3,7 @@ import electronDebug from "electron-debug";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
 import { setAutoLauch } from "./lib/auto-launch";
+import { initAttachmentStore } from "./lib/attachments";
 import { initBreaks } from "./lib/breaks";
 import "./lib/ipc";
 import { showNotification } from "./lib/notifications";
@@ -120,6 +121,8 @@ app.on("ready", async () => {
     // Extensions are broken on electron 10
     // await installExtensions()
   }
+
+  initAttachmentStore();
 
   // Required for notifications to work on windows
   if (process.platform === "win32") {

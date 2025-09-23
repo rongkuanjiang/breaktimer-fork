@@ -1,6 +1,6 @@
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { useEffect, useMemo, useState } from "react";
-import { NotificationType, Settings, SoundType } from "../../types/settings";
+import { MessageColorEffect, NotificationType, Settings, SoundType } from "../../types/settings";
 import { toast } from "../toaster";
 import AdvancedCard from "./settings/advanced-card";
 import AudioCard from "./settings/audio-card";
@@ -100,6 +100,9 @@ export default function SettingsEl() {
       textColor: "#ffffff",
       backgroundColor: "#16a085",
       backdropOpacity: 0.7,
+      titleTextColor: "#ffffff",
+      messageTextColor: "#ffffff",
+      messageColorEffect: MessageColorEffect.Static,
     });
   };
 

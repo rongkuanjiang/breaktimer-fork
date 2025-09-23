@@ -27,13 +27,25 @@ export enum BreakMessagesMode {
   Sequential = "SEQUENTIAL",
 }
 
+export enum MessageColorEffect {
+  Static = "STATIC",
+  BreathingAurora = "BREATHING_AURORA",
+  BreathingSunset = "BREATHING_SUNSET",
+  BreathingOcean = "BREATHING_OCEAN",
+}
+
 export interface BreakMessageAttachment {
   id: string;
   type: "image";
-  dataUrl: string;
+  uri?: string;
   mimeType?: string;
   name?: string;
+  sizeBytes?: number;
+  /** Legacy field retained for migration; should not be persisted going forward. */
+  dataUrl?: string;
 }
+
+export const MAX_BREAK_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 export interface BreakMessageContent {
   text: string;
@@ -50,6 +62,22 @@ function createAttachmentId(): string {
   return "att-" + Math.random().toString(36).slice(2, 10);
 }
 
+function estimateDataUrlBytes(dataUrl: string): number {
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex === -1) {
+    return 0;
+  }
+
+  const base64 = dataUrl.slice(commaIndex + 1);
+  const base64Length = base64.length;
+  if (base64Length === 0) {
+    return 0;
+  }
+
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64Length * 3) / 4) - padding);
+}
+
 function sanitizeAttachment(
   attachment: Partial<BreakMessageAttachment> | null | undefined,
 ): BreakMessageAttachment | null {
@@ -57,7 +85,16 @@ function sanitizeAttachment(
     return null;
   }
 
-  if (typeof attachment.dataUrl !== "string" || attachment.dataUrl.length === 0) {
+  const uri =
+    typeof attachment.uri === "string" && attachment.uri.length > 0
+      ? attachment.uri
+      : undefined;
+  const dataUrl =
+    typeof attachment.dataUrl === "string" && attachment.dataUrl.length > 0
+      ? attachment.dataUrl
+      : undefined;
+
+  if (!uri && !dataUrl) {
     return null;
   }
 
@@ -65,21 +102,42 @@ function sanitizeAttachment(
     typeof attachment.mimeType === "string" && attachment.mimeType.length > 0
       ? attachment.mimeType
       : undefined;
+  const name =
+    typeof attachment.name === "string" && attachment.name.length > 0
+      ? attachment.name
+      : undefined;
 
-  return {
+  const sizeBytesCandidate =
+    typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
+      ? Math.round(attachment.sizeBytes)
+      : dataUrl
+        ? estimateDataUrlBytes(dataUrl)
+        : undefined;
+
+  if (sizeBytesCandidate !== undefined && sizeBytesCandidate > MAX_BREAK_ATTACHMENT_BYTES) {
+    return null;
+  }
+
+  const sanitized: BreakMessageAttachment = {
     id:
       typeof attachment.id === "string" && attachment.id.length > 0
         ? attachment.id
         : createAttachmentId(),
     type: "image",
-    dataUrl: attachment.dataUrl,
+    uri,
     mimeType,
-    name:
-      typeof attachment.name === "string" && attachment.name.length > 0
-        ? attachment.name
-        : undefined,
+    name,
+    sizeBytes: sizeBytesCandidate,
   };
+
+  if (dataUrl) {
+    sanitized.dataUrl = dataUrl;
+  }
+
+  return sanitized;
 }
+
+
 
 export function normalizeBreakMessage(
   input: BreakMessageInput,
@@ -155,6 +213,9 @@ export interface Settings {
   breakMessagesOrder?: number[]; // stored shuffle order for sequential mode
   backgroundColor: string;
   textColor: string;
+  titleTextColor: string;
+  messageTextColor: string;
+  messageColorEffect: MessageColorEffect;
   showBackdrop: boolean;
   backdropOpacity: number;
   endBreakEnabled: boolean;
@@ -223,6 +284,9 @@ export const defaultSettings: Settings = {
   breakMessagesOrder: [0],
   backgroundColor: "#16a085",
   textColor: "#ffffff",
+  titleTextColor: "#ffffff",
+  messageTextColor: "#ffffff",
+  messageColorEffect: MessageColorEffect.Static,
   showBackdrop: true,
   backdropOpacity: 0.7,
   endBreakEnabled: true,

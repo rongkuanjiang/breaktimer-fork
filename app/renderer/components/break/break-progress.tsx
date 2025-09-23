@@ -2,9 +2,16 @@ import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { SoundType } from "../../../types/settings";
+import { MessageColorEffect, SoundType } from "../../../types/settings";
 import type { BreakMessageAttachment, BreakMessageContent, Settings } from "../../../types/settings";
 import { TimeRemaining } from "./utils";
+
+const BREATHING_PRESETS: Record<MessageColorEffect, string[]> = {
+  [MessageColorEffect.Static]: [],
+  [MessageColorEffect.BreathingAurora]: ["#38ef7d", "#4facfe", "#38ef7d"],
+  [MessageColorEffect.BreathingSunset]: ["#ff9966", "#ff5e62", "#ff9966"],
+  [MessageColorEffect.BreathingOcean]: ["#43cea2", "#185a9d", "#43cea2"],
+};
 
 interface BreakProgressProps {
   breakMessage: BreakMessageContent;
@@ -12,7 +19,10 @@ interface BreakProgressProps {
   endBreakEnabled: boolean;
   onEndBreak: () => void;
   settings: Settings;
-  textColor: string;
+  uiColor: string;
+  titleColor: string;
+  messageColor: string;
+  messageColorEffect: MessageColorEffect;
   isClosing?: boolean;
   sharedBreakEndTime?: number | null;
 }
@@ -166,7 +176,10 @@ export function BreakProgress({
   endBreakEnabled,
   onEndBreak,
   settings,
-  textColor,
+  uiColor,
+  titleColor,
+  messageColor,
+  messageColorEffect,
   isClosing = false,
   sharedBreakEndTime = null,
 }: BreakProgressProps) {
@@ -186,6 +199,33 @@ export function BreakProgress({
     [breakMessage.text],
   );
 
+  const messageAnimation = useMemo(() => {
+    if (messageColorEffect === MessageColorEffect.Static) {
+      return {
+        initial: { color: messageColor },
+        animate: { color: messageColor },
+        transition: undefined,
+      };
+    }
+
+    const palette =
+      BREATHING_PRESETS[messageColorEffect] &&
+      BREATHING_PRESETS[messageColorEffect].length > 0
+        ? BREATHING_PRESETS[messageColorEffect]
+        : [messageColor];
+
+    return {
+      initial: { color: palette[0] },
+      animate: { color: palette },
+      transition: {
+        duration: 6,
+        repeat: Infinity,
+        repeatType: "reverse" as const,
+        ease: "easeInOut" as const,
+      },
+    };
+  }, [messageColor, messageColorEffect]);
+
   const openAttachment = useCallback((attachment: BreakMessageAttachment) => {
     setPreviewAttachment(attachment);
   }, []);
@@ -193,6 +233,24 @@ export function BreakProgress({
   const closeAttachment = useCallback(() => {
     setPreviewAttachment(null);
   }, []);
+
+  useEffect(() => {
+    if (!previewAttachment) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAttachment();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeAttachment, previewAttachment]);
 
   const isPrimaryWindow = useMemo(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -298,7 +356,7 @@ export function BreakProgress({
             onClick={(event) => event.stopPropagation()}
           >
             <img
-              src={previewAttachment.dataUrl}
+              src={previewAttachment.uri || previewAttachment.dataUrl || ""}
               alt={previewAttachment.name || "Break attachment"}
               className="max-h-[80vh] max-w-[88vw] rounded-lg object-contain"
             />
@@ -318,7 +376,7 @@ export function BreakProgress({
       <div className="flex items-center justify-between mb-4 flex-shrink-0">
         <h1
           className="text-3xl font-semibold tracking-tight"
-          style={{ color: textColor }}
+          style={{ color: titleColor }}
         >
           {breakTitle}
         </h1>
@@ -328,7 +386,7 @@ export function BreakProgress({
             onClick={onEndBreak}
             variant="outline"
             style={{
-              color: textColor,
+              color: uiColor,
               borderColor: "rgba(255, 255, 255, 0.2)",
             }}
           >
@@ -341,64 +399,68 @@ export function BreakProgress({
       <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
         <div
           className="text-lg opacity-80 font-medium overflow-y-auto pr-2 custom-scroll flex-1 max-h-[60vh]"
-          style={{ color: textColor }}
         >
-          <div className="space-y-4">
+          <motion.div
+            className="space-y-4"
+            initial={messageAnimation.initial}
+            animate={messageAnimation.animate}
+            transition={messageAnimation.transition}
+            style={{ color: messageColor }}
+          >
             {formattedMessage.length > 0 ? (
               formattedMessage
             ) : (
               <p className="whitespace-pre-wrap break-words">{breakMessage.text}</p>
             )}
-            {breakMessage.attachments.length > 0 && (
-              <div className="flex flex-wrap gap-3">
-                {breakMessage.attachments.map((attachment) => (
-                  <figure
-                    key={attachment.id}
-                    className="flex flex-col gap-1 text-sm cursor-zoom-in"
-                    style={{ color: textColor }}
-                    onClick={() => openAttachment(attachment)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openAttachment(attachment);
-                      }
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <img
-                      src={attachment.dataUrl}
-                      alt={attachment.name || "Break attachment"}
-                      className="max-h-48 max-w-full rounded-lg border object-contain bg-black/20 pointer-events-none select-none"
-                      style={{ borderColor: textColor }}
-                    />
-                    {attachment.name && (
-                      <figcaption className="text-xs opacity-70">
-                        {attachment.name}
-                      </figcaption>
-                    )}
-                  </figure>
-                ))}
-              </div>
-            )}
-          </div>
+          </motion.div>
+          {breakMessage.attachments.length > 0 && (
+            <div className="flex flex-wrap gap-3 mt-4">
+              {breakMessage.attachments.map((attachment) => (
+                <figure
+                  key={attachment.id}
+                  className="flex flex-col gap-1 text-sm cursor-zoom-in"
+                  style={{ color: uiColor }}
+                  onClick={() => openAttachment(attachment)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " " ) {
+                      event.preventDefault();
+                      openAttachment(attachment);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <img
+                    src={attachment.uri || attachment.dataUrl || ""}
+                    alt={attachment.name || "Break attachment"}
+                    className="max-h-48 max-w-full rounded-lg border object-contain bg-black/20 pointer-events-none select-none"
+                    style={{ borderColor: uiColor }}
+                  />
+                  {attachment.name && (
+                    <figcaption className="text-xs opacity-70">
+                      {attachment.name}
+                    </figcaption>
+                  )}
+                </figure>
+              ))}
+            </div>
+          )}
         </div>
-
         {/* Progress section */}
         <div className="pt-4 flex-shrink-0">
           <div className="w-full">
             <div className="flex justify-end items-center mb-2">
               <div
                 className="text-sm font-medium opacity-60 flex-shrink-0 tabular-nums flex items-center gap-0.5"
-                style={{ color: textColor }}
+                style={{ color: uiColor }}
               >
-                <span style={{ color: textColor }}>
+                <span style={{ color: uiColor }}>
                   {String(
                     Math.floor(timeRemaining.hours * 60 + timeRemaining.minutes),
                   ).padStart(2, "0")} {" "}
                 </span>
-                <span style={{ color: textColor }}>:</span>
-                <span style={{ color: textColor }}>
+                <span style={{ color: uiColor }}>:</span>
+                <span style={{ color: uiColor }}>
                   {String(Math.floor(timeRemaining.seconds)).padStart(2, "0")}
                 </span>
               </div>
@@ -410,7 +472,7 @@ export function BreakProgress({
               <div
                 className="h-full transition-all duration-75 ease-out"
                 style={{
-                  backgroundColor: textColor,
+                  backgroundColor: uiColor,
                   width: `${progressPercentage}%`,
                 }}
               />

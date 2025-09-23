@@ -39,6 +39,9 @@ process.once("loaded", () => {
     invokeBreakWindowResize: () => {
       return ipcRenderer.invoke("BREAK_WINDOW_RESIZE");
     },
+    invokeSaveAttachment: (payload) => {
+      return ipcRenderer.invoke("ATTACHMENT_SAVE", payload);
+    },
     invokeGetTimeSinceLastBreak: () => {
       return ipcRenderer.invoke("TIME_SINCE_LAST_BREAK_GET");
     },

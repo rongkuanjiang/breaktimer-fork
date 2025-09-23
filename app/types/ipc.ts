@@ -1,5 +1,6 @@
 export enum IpcChannel {
   AllowPostponeGet = "ALLOW_POSTPONE_GET",
+  AttachmentSave = "ATTACHMENT_SAVE",
   AppInitializedSet = "APP_INITIALIZED_SET",
   AppInitializedGet = "APP_INITIALIZED_GET",
   BreakEnd = "BREAK_END",

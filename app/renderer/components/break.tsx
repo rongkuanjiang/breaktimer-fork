@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
-import { SoundType, normalizeBreakMessage } from "../../types/settings";
+import { MessageColorEffect, SoundType, normalizeBreakMessage } from "../../types/settings";
 import type { BreakMessageContent, Settings } from "../../types/settings";
 import { BreakNotification } from "./break/break-notification";
 import { BreakProgress } from "./break/break-progress";
@@ -199,7 +199,10 @@ export default function Break() {
             endBreakEnabled={settings.endBreakEnabled}
             onEndBreak={handleEndBreak}
             settings={settings}
-            textColor={settings.textColor}
+            uiColor={settings.textColor}
+            titleColor={settings.titleTextColor || settings.textColor}
+            messageColor={settings.messageTextColor || settings.textColor}
+            messageColorEffect={settings.messageColorEffect || MessageColorEffect.Static}
             isClosing={closing}
             sharedBreakEndTime={sharedBreakEndTime}
           />

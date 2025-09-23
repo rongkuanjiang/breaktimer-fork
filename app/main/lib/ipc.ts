@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, IpcMainInvokeEvent, screen } from "electron";
 import log from "electron-log";
 import { IpcChannel } from "../../types/ipc";
 import type { BreakMessageContent, Settings, SoundType } from "../../types/settings";
+import { saveAttachmentFromDataUrl } from "./attachments";
 import {
   completeBreakTracking,
   getAllowPostpone,
@@ -32,6 +33,23 @@ export function sendIpc(channel: IpcChannel, ...args: unknown[]): void {
     window.webContents.send(channel, ...args);
   }
 }
+
+ipcMain.handle(
+  IpcChannel.AttachmentSave,
+  (
+    _event: IpcMainInvokeEvent,
+    payload: { dataUrl: string; mimeType?: string; name?: string; sizeBytes?: number },
+  ) => {
+    log.info(IpcChannel.AttachmentSave);
+    const { dataUrl, mimeType, name, sizeBytes } = payload;
+    const attachment = saveAttachmentFromDataUrl(dataUrl, {
+      mimeType,
+      name,
+      sizeBytes,
+    });
+    return attachment;
+  },
+);
 
 ipcMain.handle(IpcChannel.AllowPostponeGet, (): boolean => {
   log.info(IpcChannel.AllowPostponeGet);
