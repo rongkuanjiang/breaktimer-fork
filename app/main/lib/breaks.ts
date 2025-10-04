@@ -76,6 +76,14 @@ export function getBreakTime(): BreakTime {
 
 export function getBreakLengthSeconds(): number {
   const settings: Settings = getSettings();
+
+  if (havingBreak) {
+    const override = currentBreakMessage?.durationSeconds;
+    if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+      return Math.max(1, Math.round(override));
+    }
+  }
+
   return settings.breakLengthSeconds;
 }
 
@@ -96,23 +104,20 @@ export function startBreakTracking(): void {
 export function completeBreakTracking(breakDurationMs: number): void {
   if (!currentBreakStartTime) return;
 
-  const settings = getSettings();
-  const requiredDurationMs = settings.breakLengthSeconds * 1000;
+  const requiredSeconds = getBreakLengthSeconds();
+  const requiredDurationMs = requiredSeconds * 1000;
   const halfRequiredDuration = requiredDurationMs / 2;
+  const durationSeconds = Math.round(breakDurationMs / 1000);
 
   if (breakDurationMs >= halfRequiredDuration) {
     lastCompletedBreakTime = new Date();
     hasSkippedOrSnoozedSinceLastBreak = false;
     log.info(
-      `Break completed [duration=${Math.round(
-        breakDurationMs / 1000,
-      )}s] [required=${settings.breakLengthSeconds}s]`,
+      `Break completed [duration=${durationSeconds}s] [required=${requiredSeconds}s]`,
     );
   } else {
     log.info(
-      `Break too short [duration=${Math.round(
-        breakDurationMs / 1000,
-      )}s] [required=${settings.breakLengthSeconds}s]`,
+      `Break too short [duration=${durationSeconds}s] [required=${requiredSeconds}s]`,
     );
   }
 
@@ -491,10 +496,16 @@ export function getCurrentBreakMessage(): BreakMessageContent | null {
     return null;
   }
 
-  return {
+  const cloned: BreakMessageContent = {
     text: currentBreakMessage.text,
     attachments: currentBreakMessage.attachments.map((attachment) => ({
       ...attachment,
     })),
   };
+
+  if (currentBreakMessage.durationSeconds !== undefined) {
+    cloned.durationSeconds = currentBreakMessage.durationSeconds;
+  }
+
+  return cloned;
 }

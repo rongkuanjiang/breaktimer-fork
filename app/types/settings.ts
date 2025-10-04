@@ -50,6 +50,7 @@ export const MAX_BREAK_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export interface BreakMessageContent {
   text: string;
   attachments: BreakMessageAttachment[];
+  durationSeconds?: number | null;
 }
 
 export type BreakMessageInput =
@@ -167,10 +168,40 @@ export function normalizeBreakMessage(
     .map((attachment) => sanitizeAttachment(attachment))
     .filter((attachment): attachment is BreakMessageAttachment => !!attachment);
 
-  return {
+  const maxDurationSeconds = 24 * 60 * 60 - 1;
+  let durationSeconds: number | null | undefined;
+  let hasDurationOverride = false;
+
+  if (typeof input === "object" && input !== null) {
+    const rawDuration = (input as Record<string, unknown>).durationSeconds;
+
+    if (typeof rawDuration === "number" && Number.isFinite(rawDuration)) {
+      const normalized = Math.max(0, Math.round(rawDuration));
+      durationSeconds = Math.min(normalized, maxDurationSeconds);
+      hasDurationOverride = true;
+    } else if (typeof rawDuration === "string") {
+      const parsed = Number.parseInt(rawDuration, 10);
+      if (!Number.isNaN(parsed)) {
+        const normalized = Math.max(0, parsed);
+        durationSeconds = Math.min(normalized, maxDurationSeconds);
+        hasDurationOverride = true;
+      }
+    } else if (rawDuration === null) {
+      durationSeconds = null;
+      hasDurationOverride = true;
+    }
+  }
+
+  const normalized: BreakMessageContent = {
     text: textSource,
     attachments,
   };
+
+  if (hasDurationOverride) {
+    normalized.durationSeconds = durationSeconds ?? null;
+  }
+
+  return normalized;
 }
 
 export function normalizeBreakMessages(

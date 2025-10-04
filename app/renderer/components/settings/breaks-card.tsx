@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import {
@@ -43,6 +44,7 @@ interface BreakMessageEditorProps {
   onChange: (value: BreakMessageContent) => void;
   onRemove: () => void;
   index: number;
+  defaultDurationSeconds: number;
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -73,9 +75,18 @@ function BreakMessageEditor({
   onChange,
   onRemove,
   index,
+  defaultDurationSeconds,
 }: BreakMessageEditorProps) {
 
   const [isProcessingPaste, setIsProcessingPaste] = useState(false);
+
+  const hasCustomDuration =
+    Object.prototype.hasOwnProperty.call(value, "durationSeconds") &&
+    value.durationSeconds !== null;
+
+  const effectiveDurationSeconds = hasCustomDuration
+    ? Math.max(0, value.durationSeconds ?? 0)
+    : defaultDurationSeconds;
 
   const handleTextChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -96,6 +107,46 @@ function BreakMessageEditor({
         attachments: value.attachments.filter((attachment) => attachment.id !== id),
       });
       onChange(next);
+    },
+    [onChange, value],
+  );
+
+  const handleCustomDurationToggle = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        onChange(
+          normalizeBreakMessage({
+            ...value,
+            durationSeconds: null,
+          }),
+        );
+        return;
+      }
+
+      const currentDuration =
+        typeof value.durationSeconds === "number" &&
+        Number.isFinite(value.durationSeconds)
+          ? Math.max(0, value.durationSeconds)
+          : defaultDurationSeconds;
+
+      onChange(
+        normalizeBreakMessage({
+          ...value,
+          durationSeconds: currentDuration,
+        }),
+      );
+    },
+    [defaultDurationSeconds, onChange, value],
+  );
+
+  const handleDurationChange = useCallback(
+    (seconds: number) => {
+      onChange(
+        normalizeBreakMessage({
+          ...value,
+          durationSeconds: seconds,
+        }),
+      );
     },
     [onChange, value],
   );
@@ -218,6 +269,33 @@ function BreakMessageEditor({
           ))}
         </div>
       )}
+      <div className="space-y-2 pt-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label className="text-sm font-medium">Custom break length</Label>
+            <p className="text-xs text-muted-foreground">
+              Override the default break length for this message.
+            </p>
+          </div>
+          <Switch
+            checked={hasCustomDuration}
+            onCheckedChange={handleCustomDurationToggle}
+            disabled={disabled}
+            aria-label="Toggle custom break length"
+          />
+        </div>
+        <TimeInput
+          precision="seconds"
+          value={effectiveDurationSeconds}
+          onChange={handleDurationChange}
+          disabled={disabled || !hasCustomDuration}
+        />
+        {!hasCustomDuration && (
+          <p className="text-xs text-muted-foreground">
+            Uses the default break length.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -343,6 +421,7 @@ export default function BreaksCard({
                 key={idx}
                 value={msg}
                 index={idx}
+                defaultDurationSeconds={settingsDraft.breakLengthSeconds}
                 disabled={!settingsDraft.breaksEnabled}
                 onChange={(updated) => {
                   const next = [...breakMessages];
