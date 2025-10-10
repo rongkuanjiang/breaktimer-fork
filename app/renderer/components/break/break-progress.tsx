@@ -4,6 +4,7 @@ import moment from "moment";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MessageColorEffect, SoundType } from "../../../types/settings";
 import type { BreakMessageAttachment, BreakMessageContent, Settings } from "../../../types/settings";
+import { FindBar } from "../find-bar";
 import { TimeRemaining } from "./utils";
 
 const BREATHING_PRESETS: Record<MessageColorEffect, string[]> = {
@@ -30,9 +31,78 @@ interface BreakProgressProps {
 type ListKind = "ul" | "ol";
 type ListStyle = "decimal" | "lower-alpha";
 
-function buildFormattedMessage(text: string): ReactNode[] {
+interface BuildFormattedMessageOptions {
+  searchTerm?: string;
+  activeMatchIndex?: number;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildFormattedMessage(
+  text: string,
+  options: BuildFormattedMessageOptions = {},
+): { nodes: ReactNode[]; totalMatches: number } {
   const lines = text.split(/\r?\n/);
   const nodes: ReactNode[] = [];
+
+  const searchTerm = options.searchTerm?.trim();
+  const activeMatchIndex = options.activeMatchIndex ?? 0;
+  const searchPattern =
+    searchTerm && searchTerm.length > 0 ? escapeRegExp(searchTerm) : null;
+  let matchCounter = 0;
+
+  const applyHighlights = (value: string): ReactNode[] => {
+    if (!searchPattern) {
+      return [value];
+    }
+
+    if (value.length === 0) {
+      return [value];
+    }
+
+    const regex = new RegExp(searchPattern, "gi");
+    const parts: ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(value)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(value.slice(lastIndex, match.index));
+      }
+
+      const currentIndex = matchCounter++;
+      const isActive = currentIndex === activeMatchIndex;
+
+      parts.push(
+        <mark
+          key={`match-${currentIndex}`}
+          data-break-match="true"
+          data-break-match-index={currentIndex}
+          className={
+            isActive
+              ? "rounded-sm bg-yellow-400 px-0.5 text-black"
+              : "rounded-sm bg-yellow-200 px-0.5 text-black"
+          }
+        >
+          {match[0]}
+        </mark>,
+      );
+
+      lastIndex = regex.lastIndex;
+    }
+
+    if (lastIndex < value.length) {
+      parts.push(value.slice(lastIndex));
+    }
+
+    if (parts.length === 0) {
+      parts.push(value);
+    }
+
+    return parts;
+  };
 
   let blockKey = 0;
   let paragraphLines: string[] = [];
@@ -52,7 +122,7 @@ function buildFormattedMessage(text: string): ReactNode[] {
     const content = paragraphLines.join("\n");
     nodes.push(
       <p className="whitespace-pre-wrap break-words" key={`p-${blockKey++}`}>
-        {content}
+        {applyHighlights(content)}
       </p>,
     );
     paragraphLines = [];
@@ -70,7 +140,7 @@ function buildFormattedMessage(text: string): ReactNode[] {
         <ul key={listKey} className="list-disc pl-5 space-y-1">
           {listState.items.map((item, idx) => (
             <li key={`${listKey}-item-${idx}`} className="whitespace-pre-wrap break-words">
-              {item}
+              {applyHighlights(item)}
             </li>
           ))}
         </ul>,
@@ -87,7 +157,7 @@ function buildFormattedMessage(text: string): ReactNode[] {
         <ol key={listKey} className={listClass} start={listState.start} style={styleProps}>
           {listState.items.map((item, idx) => (
             <li key={`${listKey}-item-${idx}`} className="whitespace-pre-wrap break-words">
-              {item}
+              {applyHighlights(item)}
             </li>
           ))}
         </ol>,
@@ -162,12 +232,12 @@ function buildFormattedMessage(text: string): ReactNode[] {
   if (nodes.length === 0 && text.trim().length > 0) {
     nodes.push(
       <p className="whitespace-pre-wrap break-words" key={`p-${blockKey++}`}>
-        {text}
+        {applyHighlights(text)}
       </p>,
     );
   }
 
-  return nodes;
+  return { nodes, totalMatches: matchCounter };
 }
 
 export function BreakProgress({
@@ -190,14 +260,27 @@ export function BreakProgress({
   const [breakStartTime] = useState(new Date());
   const [previewAttachment, setPreviewAttachment] =
     useState<BreakMessageAttachment | null>(null);
+  const [findBarOpen, setFindBarOpen] = useState(false);
+  const [findBarFocusToken, setFindBarFocusToken] = useState(0);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const soundPlayedRef = useRef(false);
   const isClosingRef = useRef(isClosing);
+  const messageContainerRef = useRef<HTMLDivElement | null>(null);
   isClosingRef.current = isClosing;
 
-  const formattedMessage = useMemo(
-    () => buildFormattedMessage(breakMessage.text),
-    [breakMessage.text],
-  );
+  const normalizedSearchTerm = searchTerm.trim();
+
+  const { nodes: formattedMessage, totalMatches } = useMemo(() => {
+    if (normalizedSearchTerm.length === 0) {
+      return buildFormattedMessage(breakMessage.text);
+    }
+
+    return buildFormattedMessage(breakMessage.text, {
+      searchTerm: normalizedSearchTerm,
+      activeMatchIndex,
+    });
+  }, [breakMessage.text, normalizedSearchTerm, activeMatchIndex]);
 
   const messageAnimation = useMemo(() => {
     if (messageColorEffect === MessageColorEffect.Static) {
@@ -225,6 +308,132 @@ export function BreakProgress({
       },
     };
   }, [messageColor, messageColorEffect]);
+
+  const handleQueryChange = useCallback((value: string) => {
+    setSearchTerm(value);
+    setActiveMatchIndex(0);
+  }, []);
+
+  const handleCloseFindBar = useCallback(() => {
+    setFindBarOpen(false);
+    setSearchTerm("");
+    setActiveMatchIndex(0);
+  }, []);
+
+  const handleNextMatch = useCallback(() => {
+    if (normalizedSearchTerm.length === 0 || totalMatches === 0) {
+      return;
+    }
+
+    setActiveMatchIndex((previous) => {
+      if (totalMatches === 0) {
+        return 0;
+      }
+      return (previous + 1) % totalMatches;
+    });
+  }, [normalizedSearchTerm, totalMatches]);
+
+  const handlePrevMatch = useCallback(() => {
+    if (normalizedSearchTerm.length === 0 || totalMatches === 0) {
+      return;
+    }
+
+    setActiveMatchIndex((previous) => {
+      if (totalMatches === 0) {
+        return 0;
+      }
+      return (previous - 1 + totalMatches) % totalMatches;
+    });
+  }, [normalizedSearchTerm, totalMatches]);
+
+  useEffect(() => {
+    if (normalizedSearchTerm.length === 0) {
+      if (activeMatchIndex !== 0) {
+        setActiveMatchIndex(0);
+      }
+      return;
+    }
+
+    if (totalMatches === 0 && activeMatchIndex !== 0) {
+      setActiveMatchIndex(0);
+      return;
+    }
+
+    if (totalMatches > 0 && activeMatchIndex >= totalMatches) {
+      setActiveMatchIndex(0);
+    }
+  }, [activeMatchIndex, normalizedSearchTerm, totalMatches]);
+
+  useEffect(() => {
+    if (!findBarOpen || normalizedSearchTerm.length === 0 || totalMatches === 0) {
+      return;
+    }
+
+    const container = messageContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const activeMatch = container.querySelector<HTMLElement>(
+      `[data-break-match-index="${activeMatchIndex}"]`,
+    );
+
+    if (activeMatch) {
+      activeMatch.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    }
+  }, [activeMatchIndex, findBarOpen, normalizedSearchTerm, totalMatches]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setFindBarOpen(true);
+        setFindBarFocusToken((value) => value + 1);
+      }
+
+      if (event.key === "Escape" && findBarOpen) {
+        event.preventDefault();
+        handleCloseFindBar();
+      }
+
+      if (!findBarOpen || normalizedSearchTerm.length === 0 || totalMatches === 0) {
+        return;
+      }
+
+      if (event.key === "F3") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handlePrevMatch();
+        } else {
+          handleNextMatch();
+        }
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handlePrevMatch();
+        } else {
+          handleNextMatch();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [
+    findBarOpen,
+    handleCloseFindBar,
+    handleNextMatch,
+    handlePrevMatch,
+    normalizedSearchTerm,
+    totalMatches,
+  ]);
 
   const openAttachment = useCallback((attachment: BreakMessageAttachment) => {
     setPreviewAttachment(attachment);
@@ -372,34 +581,48 @@ export function BreakProgress({
         className="flex flex-col h-full w-full z-10 relative"
         {...fadeIn}
       >
-      {/* Title and button row */}
-      <div className="flex items-center justify-between mb-4 flex-shrink-0">
-        <h1
-          className="text-3xl font-semibold tracking-tight"
-          style={{ color: titleColor }}
-        >
-          {breakTitle}
-        </h1>
-        {endBreakEnabled && (
-          <Button
-            className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20"
-            onClick={onEndBreak}
-            variant="outline"
-            style={{
-              color: uiColor,
-              borderColor: "rgba(255, 255, 255, 0.2)",
-            }}
-          >
-            {progress < 0.5 ? "Cancel Break" : "End Break"}
-          </Button>
+        {findBarOpen && (
+          <FindBar
+            query={searchTerm}
+            activeIndex={totalMatches > 0 ? activeMatchIndex : 0}
+            matchCount={totalMatches}
+            focusToken={findBarFocusToken}
+            placeholder="Find in message"
+            onQueryChange={handleQueryChange}
+            onClose={handleCloseFindBar}
+            onNext={handleNextMatch}
+            onPrev={handlePrevMatch}
+          />
         )}
-      </div>
+        {/* Title and button row */}
+        <div className="flex items-center justify-between mb-4 flex-shrink-0">
+          <h1
+            className="text-3xl font-semibold tracking-tight"
+            style={{ color: titleColor }}
+          >
+            {breakTitle}
+          </h1>
+          {endBreakEnabled && (
+            <Button
+              className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20"
+              onClick={onEndBreak}
+              variant="outline"
+              style={{
+                color: uiColor,
+                borderColor: "rgba(255, 255, 255, 0.2)",
+              }}
+            >
+              {progress < 0.5 ? "Cancel Break" : "End Break"}
+            </Button>
+          )}
+        </div>
 
-      {/* Scrollable message + progress container */}
-      <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
-        <div
-          className="text-lg opacity-80 font-medium overflow-y-auto pr-2 custom-scroll flex-1 max-h-[60vh]"
-        >
+        {/* Scrollable message + progress container */}
+        <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
+          <div
+            className="text-lg opacity-80 font-medium overflow-y-auto pr-2 custom-scroll flex-1 max-h-[60vh]"
+            ref={messageContainerRef}
+          >
           <motion.div
             className="space-y-4"
             initial={messageAnimation.initial}

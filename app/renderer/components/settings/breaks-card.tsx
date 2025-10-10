@@ -1,4 +1,13 @@
-import { useCallback, useState, type ChangeEvent, type ClipboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type ChangeEvent,
+  type ClipboardEvent,
+} from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -24,8 +33,10 @@ import type {
   BreakMessageAttachment,
 } from "../../../types/settings";
 import SettingsCard from "./settings-card";
+import { FindBar } from "../find-bar";
 import { toast } from "../../toaster";
 import TimeInput from "./time-input";
+import { cn } from "@/lib/utils";
 
 interface BreaksCardProps {
   settingsDraft: Settings;
@@ -38,6 +49,12 @@ interface BreaksCardProps {
   onSwitchChange: (field: string, checked: boolean) => void;
 }
 
+interface HighlightMatch {
+  start: number;
+  end: number;
+  globalIndex: number;
+}
+
 interface BreakMessageEditorProps {
   value: BreakMessageContent;
   disabled: boolean;
@@ -45,7 +62,22 @@ interface BreakMessageEditorProps {
   onRemove: () => void;
   index: number;
   defaultDurationSeconds: number;
+  textareaRef?: (element: HTMLTextAreaElement | null) => void;
+  highlightRef?: (element: HTMLDivElement | null) => void;
+  searchTerm: string;
+  isFindActive: boolean;
+  matches: HighlightMatch[];
+  activeGlobalMatchIndex: number | null;
 }
+
+interface MessageMatch {
+  type: "custom" | "fallback";
+  messageIndex: number;
+  start: number;
+  end: number;
+}
+
+const EMPTY_HIGHLIGHT_MATCHES: HighlightMatch[] = [];
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -76,10 +108,16 @@ function BreakMessageEditor({
   onRemove,
   index,
   defaultDurationSeconds,
+  textareaRef,
+  highlightRef,
+  searchTerm,
+  isFindActive,
+  matches,
+  activeGlobalMatchIndex,
 }: BreakMessageEditorProps) {
-
   const [isProcessingPaste, setIsProcessingPaste] = useState(false);
-
+  const localTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const highlightLayerRef = useRef<HTMLDivElement | null>(null);
   const hasCustomDuration =
     Object.prototype.hasOwnProperty.call(value, "durationSeconds") &&
     value.durationSeconds !== null;
@@ -211,6 +249,99 @@ function BreakMessageEditor({
     [onChange, value],
   );
 
+  const handleTextareaRef = useCallback(
+    (element: HTMLTextAreaElement | null) => {
+      localTextareaRef.current = element;
+      if (textareaRef) {
+        textareaRef(element);
+      }
+    },
+    [textareaRef],
+  );
+
+  const handleHighlightLayerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      highlightLayerRef.current = element;
+      if (highlightRef) {
+        highlightRef(element);
+      }
+    },
+    [highlightRef],
+  );
+
+  const highlightedContent = useMemo(() => {
+    if (!isFindActive || searchTerm.length === 0 || matches.length === 0) {
+      return null;
+    }
+
+    const text = value.text ?? "";
+    if (text.length === 0) {
+      return null;
+    }
+
+    const segments: ReactNode[] = [];
+    let cursor = 0;
+
+    const sortedMatches = [...matches].sort((a, b) => a.start - b.start);
+    sortedMatches.forEach((match) => {
+      if (match.start > text.length) {
+        return;
+      }
+
+      if (cursor < match.start) {
+        segments.push(text.slice(cursor, match.start));
+      }
+
+      const matchText = text.slice(match.start, Math.min(match.end, text.length));
+      const isActive = match.globalIndex === activeGlobalMatchIndex;
+        segments.push(
+          <mark
+            key={`match-${match.globalIndex}`}
+            data-match-index={match.globalIndex}
+            className={cn(
+              "rounded-sm px-0.5",
+              isActive ? "bg-yellow-300 text-black" : "bg-yellow-100 text-black",
+            )}
+          >
+          {matchText}
+        </mark>,
+      );
+
+      cursor = Math.min(match.end, text.length);
+    });
+
+    if (cursor < text.length) {
+      segments.push(text.slice(cursor));
+    }
+
+    if (segments.length === 0) {
+      return null;
+    }
+
+    return segments;
+  }, [activeGlobalMatchIndex, isFindActive, matches, searchTerm.length, value.text]);
+
+  const textareaShouldMask = Boolean(highlightedContent);
+
+  useEffect(() => {
+    const textareaElement = localTextareaRef.current;
+    const overlayElement = highlightLayerRef.current;
+    if (!textareaElement || !overlayElement) {
+      return;
+    }
+
+    const syncScroll = () => {
+      overlayElement.scrollTop = textareaElement.scrollTop;
+      overlayElement.scrollLeft = textareaElement.scrollLeft;
+    };
+
+    syncScroll();
+    textareaElement.addEventListener("scroll", syncScroll);
+    return () => {
+      textareaElement.removeEventListener("scroll", syncScroll);
+    };
+  }, [highlightedContent, isFindActive, value.text]);
+
   return (
     <div className="rounded-md border p-3 space-y-3 bg-muted/10">
       <div className="flex items-center justify-between">
@@ -225,15 +356,40 @@ function BreakMessageEditor({
           Remove
         </Button>
       </div>
-      <Textarea
-        className="text-sm resize-none flex-1"
-        rows={4}
-        value={value.text}
-        onChange={handleTextChange}
-        onPaste={handlePaste}
-        disabled={disabled}
-        placeholder="Rest your eyes..."
-      />
+        <div className="relative min-h-16">
+          {highlightedContent && (
+            <div
+              ref={handleHighlightLayerRef}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 w-full min-h-16 overflow-hidden rounded-md px-3 py-2 text-base text-foreground md:text-sm whitespace-pre-wrap break-words"
+              style={{ whiteSpace: "pre-wrap" }}
+            >
+              {highlightedContent}
+          </div>
+        )}
+        <Textarea
+          className={cn(
+            "text-sm resize-none flex-1",
+            textareaShouldMask && "bg-transparent text-transparent",
+          )}
+          rows={4}
+          value={value.text}
+          onChange={handleTextChange}
+          onPaste={handlePaste}
+          disabled={disabled}
+          placeholder="Rest your eyes..."
+          ref={handleTextareaRef}
+          style={
+            textareaShouldMask
+              ? {
+                  color: "transparent",
+                  backgroundColor: "transparent",
+                  caretColor: "hsl(var(--foreground))",
+                }
+              : undefined
+          }
+        />
+      </div>
       <p className="text-xs text-muted-foreground">Paste images directly into the message area to attach them.</p>
       {isProcessingPaste && (
         <p className="text-xs text-muted-foreground">Attaching image...</p>
@@ -307,8 +463,105 @@ export default function BreaksCard({
   onTextChange,
   onSwitchChange,
 }: BreaksCardProps) {
-  const breakMessages: BreakMessageContent[] =
-    settingsDraft.breakMessages ?? [];
+  const breakMessages: BreakMessageContent[] = useMemo(
+    () => settingsDraft.breakMessages ?? [],
+    [settingsDraft.breakMessages],
+  );
+
+  const messageRefs = useRef<Map<number, HTMLTextAreaElement>>(new Map());
+  const messageHighlightRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const fallbackMessageRef = useRef<HTMLTextAreaElement | null>(null);
+  const fallbackHighlightRef = useRef<HTMLDivElement | null>(null);
+  const setFallbackMessageRef = useCallback((element: HTMLTextAreaElement | null) => {
+    fallbackMessageRef.current = element;
+  }, []);
+  const shouldRevealRef = useRef(false);
+
+  const [findBarOpen, setFindBarOpen] = useState(false);
+  const [findBarFocusToken, setFindBarFocusToken] = useState(0);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [matches, setMatches] = useState<MessageMatch[]>([]);
+
+  const normalizedSearchTerm = searchTerm.trim();
+  const matchCount = matches.length;
+  const isFindActive = findBarOpen && normalizedSearchTerm.length > 0;
+
+  const matchesByMessage = useMemo(() => {
+    const map = new Map<number, HighlightMatch[]>();
+    matches.forEach((match, idx) => {
+      const key = match.type === "custom" ? match.messageIndex : -1;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key)!.push({
+        start: match.start,
+        end: match.end,
+        globalIndex: idx,
+      });
+    });
+    return map;
+  }, [matches]);
+
+  const activeGlobalMatchIndex = matchCount > 0 ? activeMatchIndex : null;
+  const fallbackHighlightedContent = useMemo(() => {
+    if (!isFindActive) {
+      return null;
+    }
+
+    const fallbackMatches = matchesByMessage.get(-1);
+    if (!fallbackMatches || fallbackMatches.length === 0) {
+      return null;
+    }
+
+    const text = settingsDraft.breakMessage ?? "";
+    if (text.length === 0) {
+      return null;
+    }
+
+    const segments: ReactNode[] = [];
+    let cursor = 0;
+
+    const sortedMatches = [...fallbackMatches].sort((a, b) => a.start - b.start);
+    sortedMatches.forEach((match) => {
+      if (match.start > text.length) {
+        return;
+      }
+
+      if (cursor < match.start) {
+        segments.push(text.slice(cursor, match.start));
+      }
+
+      const matchText = text.slice(match.start, Math.min(match.end, text.length));
+      const isActive = match.globalIndex === activeGlobalMatchIndex;
+        segments.push(
+          <mark
+            key={`fallback-match-${match.globalIndex}`}
+            data-match-index={match.globalIndex}
+            className={cn(
+              "rounded-sm px-0.5",
+              isActive ? "bg-yellow-300 text-black" : "bg-yellow-100 text-black",
+            )}
+          >
+          {matchText}
+        </mark>,
+      );
+
+      cursor = Math.min(match.end, text.length);
+    });
+
+    if (cursor < text.length) {
+      segments.push(text.slice(cursor));
+    }
+
+    if (segments.length === 0) {
+      return null;
+    }
+
+    return segments;
+  }, [activeGlobalMatchIndex, isFindActive, matchesByMessage, settingsDraft.breakMessage]);
+
+  const fallbackTextareaShouldMask = Boolean(fallbackHighlightedContent);
 
   const handleMessagesChange = useCallback(
     (messages: BreakMessageContent[]) => {
@@ -316,6 +569,246 @@ export default function BreaksCard({
     },
     [onTextChange],
   );
+
+  const registerMessageRef = useCallback(
+    (index: number, element: HTMLTextAreaElement | null) => {
+      if (element) {
+        messageRefs.current.set(index, element);
+      } else {
+        messageRefs.current.delete(index);
+      }
+    },
+    [],
+  );
+
+  const registerMessageHighlightRef = useCallback(
+    (index: number, element: HTMLDivElement | null) => {
+      if (element) {
+        messageHighlightRefs.current.set(index, element);
+      } else {
+        messageHighlightRefs.current.delete(index);
+      }
+    },
+    [],
+  );
+
+  const handleQueryChange = useCallback((value: string) => {
+    setSearchTerm(value);
+    setActiveMatchIndex(0);
+    shouldRevealRef.current = value.trim().length > 0;
+  }, []);
+
+  const handleCloseFindBar = useCallback(() => {
+    setFindBarOpen(false);
+    setSearchTerm("");
+    setActiveMatchIndex(0);
+    shouldRevealRef.current = false;
+  }, []);
+
+  const handleNextMatch = useCallback(() => {
+    if (matchCount === 0) {
+      return;
+    }
+    shouldRevealRef.current = true;
+    setActiveMatchIndex((prev) => (prev + 1) % matchCount);
+  }, [matchCount]);
+
+  const handlePrevMatch = useCallback(() => {
+    if (matchCount === 0) {
+      return;
+    }
+    shouldRevealRef.current = true;
+    setActiveMatchIndex((prev) => (prev - 1 + matchCount) % matchCount);
+  }, [matchCount]);
+
+  useEffect(() => {
+    const textareaElement = fallbackMessageRef.current;
+    const overlayElement = fallbackHighlightRef.current;
+    if (!textareaElement || !overlayElement) {
+      return;
+    }
+
+    const syncScroll = () => {
+      overlayElement.scrollTop = textareaElement.scrollTop;
+      overlayElement.scrollLeft = textareaElement.scrollLeft;
+    };
+
+    syncScroll();
+    textareaElement.addEventListener("scroll", syncScroll);
+    return () => {
+      textareaElement.removeEventListener("scroll", syncScroll);
+    };
+  }, [fallbackHighlightedContent, isFindActive, settingsDraft.breakMessage]);
+
+  useEffect(() => {
+    if (normalizedSearchTerm.length === 0) {
+      setMatches([]);
+      setActiveMatchIndex(0);
+      return;
+    }
+
+    const lowerTerm = normalizedSearchTerm.toLowerCase();
+    const computedMatches: MessageMatch[] = [];
+
+    breakMessages.forEach((message, idx) => {
+      const text = message.text ?? "";
+      if (!text) {
+        return;
+      }
+      const lowerText = text.toLowerCase();
+      let pointer = lowerText.indexOf(lowerTerm);
+      while (pointer !== -1) {
+        computedMatches.push({
+          type: "custom",
+          messageIndex: idx,
+          start: pointer,
+          end: pointer + normalizedSearchTerm.length,
+        });
+        pointer = lowerText.indexOf(lowerTerm, pointer + lowerTerm.length);
+      }
+    });
+
+    const fallbackText = settingsDraft.breakMessage ?? "";
+    if (fallbackText) {
+      const lowerText = fallbackText.toLowerCase();
+      let pointer = lowerText.indexOf(lowerTerm);
+      while (pointer !== -1) {
+        computedMatches.push({
+          type: "fallback",
+          messageIndex: -1,
+          start: pointer,
+          end: pointer + normalizedSearchTerm.length,
+        });
+        pointer = lowerText.indexOf(lowerTerm, pointer + lowerTerm.length);
+      }
+    }
+
+    setMatches(computedMatches);
+    setActiveMatchIndex((prev) => {
+      if (computedMatches.length === 0) {
+        return 0;
+      }
+      return Math.min(prev, computedMatches.length - 1);
+    });
+  }, [breakMessages, normalizedSearchTerm, settingsDraft.breakMessage]);
+
+  useEffect(() => {
+    if (!findBarOpen || normalizedSearchTerm.length === 0 || matchCount === 0) {
+      return;
+    }
+
+    if (!shouldRevealRef.current) {
+      return;
+    }
+
+    const activeMatch = matches[activeMatchIndex];
+    if (!activeMatch) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      shouldRevealRef.current = false;
+      const targetElement =
+        activeMatch.type === "custom"
+          ? messageRefs.current.get(activeMatch.messageIndex) ?? null
+          : fallbackMessageRef.current;
+
+      if (targetElement && !targetElement.disabled) {
+        try {
+          targetElement.focus({ preventScroll: true });
+        } catch {
+          targetElement.focus();
+        }
+        try {
+          targetElement.setSelectionRange(activeMatch.start, activeMatch.end);
+        } catch {
+          /* ignore selection issues */
+        }
+      }
+
+      const highlightContainer =
+        activeMatch.type === "custom"
+          ? messageHighlightRefs.current.get(activeMatch.messageIndex) ?? null
+          : fallbackHighlightRef.current;
+
+      const highlightElement = highlightContainer?.querySelector<HTMLElement>(
+        `[data-match-index="${activeMatchIndex}"]`,
+      );
+
+      if (highlightElement) {
+        highlightElement.scrollIntoView({
+          block: "center",
+          inline: "nearest",
+          behavior: "smooth",
+        });
+      } else if (targetElement) {
+        targetElement.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+
+      setFindBarFocusToken((token) => token + 1);
+    });
+  }, [
+    activeMatchIndex,
+    findBarOpen,
+    matchCount,
+    matches,
+    normalizedSearchTerm,
+    setFindBarFocusToken,
+  ]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setFindBarOpen(true);
+        setFindBarFocusToken((token) => token + 1);
+        shouldRevealRef.current = true;
+      }
+
+      if (event.key === "Escape" && findBarOpen) {
+        event.preventDefault();
+        handleCloseFindBar();
+        return;
+      }
+
+      if (!findBarOpen || normalizedSearchTerm.length === 0 || matchCount === 0) {
+        return;
+      }
+
+      if (event.key === "F3") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handlePrevMatch();
+        } else {
+          handleNextMatch();
+        }
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handlePrevMatch();
+        } else {
+          handleNextMatch();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [
+    findBarOpen,
+    handleCloseFindBar,
+    handleNextMatch,
+    handlePrevMatch,
+    matchCount,
+    normalizedSearchTerm,
+  ]);
 
   return (
     <SettingsCard
@@ -325,7 +818,23 @@ export default function BreaksCard({
         onCheckedChange: (checked) => onSwitchChange("breaksEnabled", checked),
       }}
     >
-      <div className="space-y-4">
+      <div className="relative space-y-4">
+        {findBarOpen && (
+          <FindBar
+            query={searchTerm}
+            activeIndex={matchCount > 0 ? activeMatchIndex : 0}
+            matchCount={matchCount}
+            focusToken={findBarFocusToken}
+            position="fixed"
+            scheme="light"
+            placeholder="Find messages"
+            autoSelect={false}
+            onQueryChange={handleQueryChange}
+            onClose={handleCloseFindBar}
+            onNext={handleNextMatch}
+            onPrev={handlePrevMatch}
+          />
+        )}
         <div className="grid grid-cols-3 gap-4">
           <div className="space-y-2">
             <Label className="text-sm font-medium">Type</Label>
@@ -423,6 +932,12 @@ export default function BreaksCard({
                 index={idx}
                 defaultDurationSeconds={settingsDraft.breakLengthSeconds}
                 disabled={!settingsDraft.breaksEnabled}
+                textareaRef={(element) => registerMessageRef(idx, element)}
+                highlightRef={(element) => registerMessageHighlightRef(idx, element)}
+                searchTerm={normalizedSearchTerm}
+                isFindActive={isFindActive}
+                matches={matchesByMessage.get(idx) ?? EMPTY_HIGHLIGHT_MATCHES}
+                activeGlobalMatchIndex={activeGlobalMatchIndex}
                 onChange={(updated) => {
                   const next = [...breakMessages];
                   next[idx] = updated;
@@ -463,15 +978,39 @@ export default function BreaksCard({
             </div>
           </div>
           <Label className="text-sm font-medium mt-4 block">Single Message (fallback)</Label>
-          <Textarea
-            id="break-message"
-            className="text-sm resize-none"
-            rows={3}
-            value={settingsDraft.breakMessage}
-            onChange={onTextChange.bind(null, "breakMessage")}
-            disabled={!settingsDraft.breaksEnabled}
-            placeholder="Enter your break message..."
-          />
+          <div className="relative min-h-16">
+            {fallbackHighlightedContent && (
+              <div
+                ref={fallbackHighlightRef}
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 w-full min-h-16 overflow-hidden rounded-md px-3 py-2 text-base text-foreground md:text-sm whitespace-pre-wrap break-words"
+                style={{ whiteSpace: "pre-wrap" }}
+              >
+                {fallbackHighlightedContent}
+              </div>
+            )}
+            <Textarea
+              id="break-message"
+              className={cn("text-sm resize-none", fallbackTextareaShouldMask && "bg-transparent text-transparent")}
+              rows={3}
+              value={settingsDraft.breakMessage}
+              onChange={onTextChange.bind(null, "breakMessage")}
+              disabled={!settingsDraft.breaksEnabled}
+              placeholder="Enter your break message..."
+              ref={(element) => {
+                setFallbackMessageRef(element);
+              }}
+              style={
+                fallbackTextareaShouldMask
+                  ? {
+                      color: "transparent",
+                      backgroundColor: "transparent",
+                      caretColor: "hsl(var(--foreground))",
+                    }
+                  : undefined
+              }
+            />
+          </div>
         </div>
       </div>
     </SettingsCard>
