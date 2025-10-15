@@ -16,6 +16,32 @@ import {
   saveAttachmentFromDataUrl,
 } from "./attachments";
 
+class AttachmentPersistenceError extends Error {
+  attachmentName?: string;
+  messageIndex?: number;
+  details?: string;
+  cause?: unknown;
+
+  constructor(
+    message: string,
+    options?: {
+      attachmentName?: string;
+      messageIndex?: number;
+      details?: string;
+      cause?: unknown;
+    },
+  ) {
+    super(message);
+    this.name = "AttachmentPersistenceError";
+    this.attachmentName = options?.attachmentName;
+    this.messageIndex = options?.messageIndex;
+    this.details = options?.details;
+    if (options && "cause" in options) {
+      this.cause = options.cause;
+    }
+  }
+}
+
 interface Migration {
   version: number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -211,6 +237,16 @@ const migrations: Migration[] = [
       return settings;
     },
   },
+  {
+    version: 9,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    migrate: (settings: any) => {
+      if (typeof settings.backgroundImage === "undefined") {
+        settings.backgroundImage = null;
+      }
+      return settings;
+    },
+  },
 ];
 
 function collectAttachmentIds(messages: BreakMessageContent[] | undefined): Set<string> {
@@ -230,14 +266,21 @@ function collectAttachmentIds(messages: BreakMessageContent[] | undefined): Set<
   return ids;
 }
 
+interface PersistAttachmentsOptions {
+  onPersist?: (attachment: BreakMessageAttachment) => void;
+}
+
 function persistAttachments(
   messages: BreakMessageContent[] | undefined,
+  options: PersistAttachmentsOptions = {},
 ): BreakMessageContent[] {
   if (!Array.isArray(messages)) {
     return [];
   }
 
-  return messages.map((message) => {
+  const newAttachmentIds: string[] = [];
+
+  const persistMessage = (message: BreakMessageContent, messageIndex: number): BreakMessageContent => {
     const persisted: BreakMessageAttachment[] = [];
 
     for (const attachment of message.attachments || []) {
@@ -252,9 +295,24 @@ function persistAttachments(
             name: attachment.name,
             sizeBytes: attachment.sizeBytes,
           });
+          options.onPersist?.(saved);
           persisted.push(saved);
+          newAttachmentIds.push(saved.id);
         } catch (error) {
-          log.warn("Dropping attachment that failed to persist", error);
+          log.error(
+            "Failed to persist attachment from dataUrl",
+            attachment.name ?? "<unnamed>",
+            error,
+          );
+          throw new AttachmentPersistenceError(
+            `Failed to save attachment${attachment.name ? ` "${attachment.name}"` : ""}.`,
+            {
+              attachmentName: attachment.name,
+              messageIndex,
+              details: error instanceof Error ? error.message : String(error),
+              cause: error,
+            },
+          );
         }
         continue;
       }
@@ -279,7 +337,79 @@ function persistAttachments(
       ...message,
       attachments: persisted,
     };
-  });
+  };
+
+  try {
+    return messages.map(persistMessage);
+  } catch (error) {
+    for (const id of newAttachmentIds) {
+      try {
+        deleteAttachment(id);
+      } catch (cleanupError) {
+        log.warn("Failed to clean up attachment after persistence error", id, cleanupError);
+      }
+    }
+    throw error;
+  }
+}
+
+function persistBackgroundImage(
+  attachment: BreakMessageAttachment | null | undefined,
+  options: PersistAttachmentsOptions = {},
+): BreakMessageAttachment | null {
+  if (!attachment || attachment.type !== "image") {
+    return null;
+  }
+
+  if (attachment.dataUrl) {
+    try {
+      const saved = saveAttachmentFromDataUrl(attachment.dataUrl, {
+        mimeType: attachment.mimeType,
+        name: attachment.name,
+        sizeBytes: attachment.sizeBytes,
+      });
+      options.onPersist?.(saved);
+      return saved;
+    } catch (error) {
+      log.error(
+        "Failed to persist background image from dataUrl",
+        attachment.name ?? "<unnamed>",
+        error,
+      );
+      throw new AttachmentPersistenceError(
+        `Failed to save background image${attachment.name ? ` "${attachment.name}"` : ""}.`,
+        {
+          attachmentName: attachment.name,
+          details: error instanceof Error ? error.message : String(error),
+          cause: error,
+        },
+      );
+    }
+  }
+
+  if (attachment.uri && attachment.id) {
+    if (attachmentExists(attachment.id)) {
+      return {
+        id: attachment.id,
+        type: "image",
+        uri: attachment.uri,
+        mimeType: attachment.mimeType,
+        name: attachment.name,
+        sizeBytes: attachment.sizeBytes,
+      };
+    }
+
+    log.error("Failed to locate background image file on disk", attachment.id);
+    throw new AttachmentPersistenceError(
+      `Failed to save background image${attachment.name ? ` "${attachment.name}"` : ""}.`,
+      {
+        attachmentName: attachment.name,
+        details: "File was not found after persistence attempt.",
+      },
+    );
+  }
+
+  return null;
 }
 
 const store = new Store({
@@ -342,40 +472,64 @@ export function getSettings(): Settings {
 
 export function setSettings(settings: Settings, resetBreaks = true): void {
   const currentSettings = getSettings();
+  const cleanupAttachmentIds: string[] = [];
 
-  if (currentSettings.autoLaunch !== settings.autoLaunch) {
-    setAutoLauch(settings.autoLaunch);
-  }
-
-  const normalizedMessages = normalizeBreakMessages(settings.breakMessages);
-  const persistedMessages = persistAttachments(normalizedMessages);
-
-  const titleTextColor = settings.titleTextColor || settings.textColor;
-  const messageTextColor = settings.messageTextColor || settings.textColor;
-  const messageColorEffect =
-    settings.messageColorEffect || MessageColorEffect.Static;
-
-  const nextSettings: Settings = {
-    ...settings,
-    titleTextColor,
-    messageTextColor,
-    messageColorEffect,
-    breakMessages: persistedMessages,
-  };
-
-  const currentAttachmentIds = collectAttachmentIds(currentSettings.breakMessages);
-  const nextAttachmentIds = collectAttachmentIds(persistedMessages);
-
-  for (const id of currentAttachmentIds) {
-    if (!nextAttachmentIds.has(id)) {
-      deleteAttachment(id);
+  try {
+    if (currentSettings.autoLaunch !== settings.autoLaunch) {
+      setAutoLauch(settings.autoLaunch);
     }
-  }
 
-  store.set({ settings: nextSettings });
+    const normalizedMessages = normalizeBreakMessages(settings.breakMessages);
+    const persistedMessages = persistAttachments(normalizedMessages, {
+      onPersist: (attachment) => cleanupAttachmentIds.push(attachment.id),
+    });
+    const persistedBackgroundImage = persistBackgroundImage(settings.backgroundImage, {
+      onPersist: (attachment) => cleanupAttachmentIds.push(attachment.id),
+    });
 
-  if (resetBreaks) {
-    initBreaks();
+    const titleTextColor = settings.titleTextColor || settings.textColor;
+    const messageTextColor = settings.messageTextColor || settings.textColor;
+    const messageColorEffect =
+      settings.messageColorEffect || MessageColorEffect.Static;
+
+    const nextSettings: Settings = {
+      ...settings,
+      titleTextColor,
+      messageTextColor,
+      messageColorEffect,
+      breakMessages: persistedMessages,
+      backgroundImage: persistedBackgroundImage,
+    };
+
+    const currentAttachmentIds = collectAttachmentIds(currentSettings.breakMessages);
+    if (currentSettings.backgroundImage?.id) {
+      currentAttachmentIds.add(currentSettings.backgroundImage.id);
+    }
+    const nextAttachmentIds = collectAttachmentIds(persistedMessages);
+    if (persistedBackgroundImage?.id) {
+      nextAttachmentIds.add(persistedBackgroundImage.id);
+    }
+
+    for (const id of currentAttachmentIds) {
+      if (!nextAttachmentIds.has(id)) {
+        deleteAttachment(id);
+      }
+    }
+
+    store.set({ settings: nextSettings });
+
+    if (resetBreaks) {
+      initBreaks();
+    }
+  } catch (error) {
+    for (const id of cleanupAttachmentIds) {
+      try {
+        deleteAttachment(id);
+      } catch (cleanupError) {
+        log.warn("Failed to clean up attachment after settings save error", id, cleanupError);
+      }
+    }
+    throw error;
   }
 }
 

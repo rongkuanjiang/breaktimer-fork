@@ -11,6 +11,7 @@ export default defineConfig({
   build: {
     outDir: "../../dist/renderer",
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1024,
   },
   resolve: {
     alias: {

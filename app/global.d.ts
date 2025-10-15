@@ -3,6 +3,7 @@ declare const ipcRenderer: {
   invokeGetAllowPostpone: () => Promise<boolean>;
   invokeGetBreakLength: () => Promise<number>;
   invokeBreakWindowResize: () => Promise<void>;
+  invokeBreakWindowReady: () => Promise<void>;
   invokeSaveAttachment: (payload: { dataUrl: string; mimeType?: string; name?: string; sizeBytes?: number }) => Promise<import("./types/settings").BreakMessageAttachment>;
   invokeGetSettings: () => Promise<unknown>;
   invokeGetCurrentBreakMessage: () => Promise<import("./types/settings").BreakMessageContent | null>;

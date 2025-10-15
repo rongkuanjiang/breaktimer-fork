@@ -18,4 +18,12 @@ module.exports = {
     filename: "main.prod.js",
     path: require("path").resolve(__dirname, "app/main/dist"),
   },
+  cache: {
+    type: "filesystem",
+  },
+  stats: {
+    preset: "errors-warnings",
+    colors: true,
+    orphanModules: false,
+  },
 };

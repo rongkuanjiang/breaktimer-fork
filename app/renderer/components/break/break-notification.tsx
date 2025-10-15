@@ -14,9 +14,11 @@ interface BreakNotificationProps {
   onStartBreakNow: () => void;
   postponeBreakEnabled: boolean;
   skipBreakEnabled: boolean;
+  postponeLimitReached: boolean;
   timeSinceLastBreak: number | null;
   textColor: string;
   backgroundColor: string;
+  backgroundImage?: string | null;
 }
 
 export function BreakNotification({
@@ -26,9 +28,11 @@ export function BreakNotification({
   onStartBreakNow,
   postponeBreakEnabled,
   skipBreakEnabled,
+  postponeLimitReached,
   timeSinceLastBreak,
   textColor,
   backgroundColor,
+  backgroundImage,
 }: BreakNotificationProps) {
   const [phase, setPhase] = useState<"grace" | "countdown">("grace");
   const [msRemaining, setMsRemaining] = useState<number>(0);
@@ -70,21 +74,34 @@ export function BreakNotification({
       ? ((countdownDurationMs - msRemaining) / countdownDurationMs) * 100
       : 0;
 
+  const showBackgroundImage = Boolean(backgroundImage);
+
   return (
     <motion.div
-      className="flex flex-col w-full h-full z-20 rounded-xl overflow-hidden relative"
+      className="flex flex-col w-full h-full rounded-xl overflow-hidden relative"
       initial={{ opacity: 0, scale: 0.9, y: 10 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.9, y: 10 }}
       transition={{ duration: 0.3 }}
       style={{
-        backgroundColor,
         color: textColor,
       }}
     >
+      {showBackgroundImage && (
+        <div
+          className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat"
+          style={{ backgroundImage: `url(${backgroundImage})` }}
+          aria-hidden="true"
+        />
+      )}
+      <div
+        className="absolute inset-0 z-10"
+        style={{ backgroundColor }}
+        aria-hidden="true"
+      />
       {phase === "countdown" && (
         <div
-          className="absolute inset-0 transition-all duration-75 ease-linear"
+          className="absolute inset-y-0 left-0 z-20 transition-all duration-75 ease-linear"
           style={{
             background: textColor,
             opacity: 0.15,
@@ -94,7 +111,7 @@ export function BreakNotification({
           }}
         />
       )}
-      <div className="flex justify-between items-center px-6 py-2 h-full">
+      <div className="flex justify-between items-center px-6 py-2 h-full relative z-30">
         <div className="flex flex-col justify-center">
           <h2
             className="text-lg font-semibold tracking-tight"
@@ -104,7 +121,7 @@ export function BreakNotification({
               ? "Start your break when ready..."
               : `Break starting in ${secondsRemaining}s...`}
           </h2>
-          {timeSinceLastBreak && (
+          {timeSinceLastBreak !== null && (
             <p
               className="text-sm opacity-80 font-medium"
               style={{ color: textColor }}
@@ -114,61 +131,71 @@ export function BreakNotification({
           )}
         </div>
 
-        <div className="flex justify-center gap-3 relative z-10">
-          <div className="relative">
-            <div
-              className="absolute inset-0 rounded-md"
-              style={{ backgroundColor }}
-            />
-            <Button
-              className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
-              onClick={onStartBreakNow}
-              variant="outline"
-              style={{
-                color: textColor,
-                borderColor: "rgba(255, 255, 255, 0.2)",
-              }}
-            >
-              Start
-            </Button>
+        <div className="flex flex-col items-end gap-1 relative z-10">
+          <div className="flex justify-center gap-3">
+            <div className="relative">
+              <div
+                className="absolute inset-0 rounded-md"
+                style={{ backgroundColor }}
+              />
+              <Button
+                className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
+                onClick={onStartBreakNow}
+                variant="outline"
+                style={{
+                  color: textColor,
+                  borderColor: "rgba(255, 255, 255, 0.2)",
+                }}
+              >
+                Start
+              </Button>
+            </div>
+            {postponeBreakEnabled && (
+              <div className="relative">
+                <div
+                  className="absolute inset-0 rounded-md"
+                  style={{ backgroundColor }}
+                />
+                <Button
+                  className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
+                  onClick={onPostponeBreak}
+                  variant="outline"
+                  style={{
+                    color: textColor,
+                    borderColor: "rgba(255, 255, 255, 0.2)",
+                  }}
+                >
+                  Snooze
+                </Button>
+              </div>
+            )}
+            {skipBreakEnabled && (
+              <div className="relative">
+                <div
+                  className="absolute inset-0 rounded-md"
+                  style={{ backgroundColor }}
+                />
+                <Button
+                  className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
+                  onClick={onSkipBreak}
+                  variant="outline"
+                  style={{
+                    color: textColor,
+                    borderColor: "rgba(255, 255, 255, 0.2)",
+                  }}
+                >
+                  Skip
+                </Button>
+              </div>
+            )}
           </div>
-          {postponeBreakEnabled && (
-            <div className="relative">
-              <div
-                className="absolute inset-0 rounded-md"
-                style={{ backgroundColor }}
-              />
-              <Button
-                className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
-                onClick={onPostponeBreak}
-                variant="outline"
-                style={{
-                  color: textColor,
-                  borderColor: "rgba(255, 255, 255, 0.2)",
-                }}
-              >
-                Snooze
-              </Button>
-            </div>
-          )}
-          {skipBreakEnabled && (
-            <div className="relative">
-              <div
-                className="absolute inset-0 rounded-md"
-                style={{ backgroundColor }}
-              />
-              <Button
-                className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20 relative z-10"
-                onClick={onSkipBreak}
-                variant="outline"
-                style={{
-                  color: textColor,
-                  borderColor: "rgba(255, 255, 255, 0.2)",
-                }}
-              >
-                Skip
-              </Button>
-            </div>
+          {postponeLimitReached && (
+            <p
+              className="text-xs font-medium opacity-80 text-right"
+              style={{ color: textColor }}
+            >
+              Snooze and skip limit reached; break will start soon.
+            </p>
           )}
         </div>
       </div>

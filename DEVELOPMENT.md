@@ -49,6 +49,22 @@ To package apps for the local platform:
 npm run package
 ```
 
+### Fast Windows packaging for local testing
+
+When you just need an unsigned Windows build to verify changes quickly, use the fast path:
+
+```bash
+npm run package-win-fast
+```
+
+The command skips code signing, disables asar packaging, and writes to `release-fast`. Re-running the packaging step without rebuilding is even faster:
+
+```bash
+npm run package-win-fast:nobuild
+```
+
+:warning: These artefacts are **not** suitable for distribution (no installer, no signing). Run the standard packaging scripts before publishing.
+
 :bulb: When packaging for MacOS make sure to set your signing/notirization env variables per [the electron-builder docs](https://www.electron.build/mac#notarize). You can obtain an API key from [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api).
 Create a **Team Key** (not an _Individual Key_) with **App Manager** access.:
 

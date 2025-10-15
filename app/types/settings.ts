@@ -138,7 +138,11 @@ function sanitizeAttachment(
   return sanitized;
 }
 
-
+export function normalizeAttachment(
+  attachment: Partial<BreakMessageAttachment> | null | undefined,
+): BreakMessageAttachment | null {
+  return sanitizeAttachment(attachment);
+}
 
 export function normalizeBreakMessage(
   input: BreakMessageInput,
@@ -243,6 +247,7 @@ export interface Settings {
   breakMessagesNextIndex?: number; // internal pointer for sequential mode
   breakMessagesOrder?: number[]; // stored shuffle order for sequential mode
   backgroundColor: string;
+  backgroundImage: BreakMessageAttachment | null;
   textColor: string;
   titleTextColor: string;
   messageTextColor: string;
@@ -314,6 +319,7 @@ export const defaultSettings: Settings = {
   breakMessagesNextIndex: 0,
   breakMessagesOrder: [0],
   backgroundColor: "#16a085",
+  backgroundImage: null,
   textColor: "#ffffff",
   titleTextColor: "#ffffff",
   messageTextColor: "#ffffff",

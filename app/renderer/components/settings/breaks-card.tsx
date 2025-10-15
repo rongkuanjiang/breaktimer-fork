@@ -25,6 +25,7 @@ import {
   NotificationType,
   BreakMessagesMode,
   normalizeBreakMessage,
+  normalizeAttachment,
   MAX_BREAK_ATTACHMENT_BYTES,
 } from "../../../types/settings";
 import type {
@@ -218,16 +219,20 @@ function BreakMessageEditor({
 
           try {
             const dataUrl = await readFileAsDataUrl(file);
-            const saved = (await ipcRenderer.invokeSaveAttachment({
+            const saved = normalizeAttachment({
               dataUrl,
               mimeType: file.type,
               name: file.name,
               sizeBytes: file.size,
-            })) as BreakMessageAttachment;
-            attachments.push(saved);
+            });
+            if (saved) {
+              attachments.push(saved);
+            } else {
+              toast("Couldn't use that image. Try a different file.");
+            }
           } catch (error) {
-            console.error("Failed to persist pasted image", error);
-            toast("Couldn't save attachment. Try a smaller file.");
+            console.error("Failed to read pasted image", error);
+            toast("Couldn't load attachment. Try a different file.");
           }
         }
 
@@ -402,7 +407,7 @@ function BreakMessageEditor({
               className="relative rounded-md border bg-background p-2"
             >
               <img
-                src={attachment.uri}
+                src={attachment.uri || attachment.dataUrl || ""}
                 alt={attachment.name || "Break message attachment"}
                 className="max-h-32 max-w-[16rem] rounded-sm object-contain"
               />

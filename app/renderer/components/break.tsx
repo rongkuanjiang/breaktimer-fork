@@ -1,10 +1,10 @@
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { MessageColorEffect, SoundType, normalizeBreakMessage } from "../../types/settings";
 import type { BreakMessageContent, Settings } from "../../types/settings";
 import { BreakNotification } from "./break/break-notification";
 import { BreakProgress } from "./break/break-progress";
-import { createDarkerRgba } from "./break/utils";
+import { createDarkerRgba, createRgba } from "./break/utils";
 
 export default function Break() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -17,9 +17,18 @@ export default function Break() {
   );
   const [ready, setReady] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [breakWindowReady, setBreakWindowReady] = useState(false);
   const [sharedBreakEndTime, setSharedBreakEndTime] = useState<number | null>(
     null,
   );
+  const hasNotifiedWindowReadyRef = useRef(false);
+  const hasSignaledBreakStartRef = useRef(false);
+
+  const isPrimaryWindow = useMemo(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const windowId = urlParams.get("windowId");
+    return windowId === "0" || windowId === null;
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -51,8 +60,17 @@ export default function Break() {
     };
 
     // Listen for break start broadcasts from other windows
-    const handleBreakStart = (breakEndTime: number) => {
-      setSharedBreakEndTime(breakEndTime);
+    const handleBreakStart = (breakEndTime: number | string) => {
+      const parsedBreakEndTime =
+        typeof breakEndTime === "number"
+          ? breakEndTime
+          : typeof breakEndTime === "string"
+            ? Number.parseInt(breakEndTime, 10)
+            : Number.NaN;
+
+      setSharedBreakEndTime(
+        Number.isFinite(parsedBreakEndTime) ? parsedBreakEndTime : null,
+      );
       setCountingDown(false);
     };
 
@@ -69,25 +87,87 @@ export default function Break() {
     setTimeout(init, 1000);
   }, []);
 
-  const handleCountdownOver = useCallback(() => {
-    setCountingDown(false);
+  useEffect(() => {
+    if (!ready || hasNotifiedWindowReadyRef.current) {
+      return;
+    }
+
+    hasNotifiedWindowReadyRef.current = true;
+
+    const notifyMainProcess = async () => {
+      try {
+        await ipcRenderer.invokeBreakWindowReady();
+      } catch (error) {
+        console.warn("Failed to notify main process that break window is ready", error);
+      }
+    };
+
+    void notifyMainProcess();
+  }, [ready]);
+
+  const signalBreakStart = useCallback(async () => {
+    if (hasSignaledBreakStartRef.current) {
+      return;
+    }
+
+    hasSignaledBreakStartRef.current = true;
+
+    try {
+      await ipcRenderer.invokeBreakStart();
+    } catch (error) {
+      hasSignaledBreakStartRef.current = false;
+      console.warn("Failed to notify main process to start break", error);
+    }
   }, []);
 
-  const handleStartBreakNow = useCallback(async () => {
-    await ipcRenderer.invokeBreakStart();
-  }, []);
+  const handleCountdownOver = useCallback(() => {
+    if (isPrimaryWindow) {
+      void signalBreakStart();
+    }
+    setCountingDown(false);
+  }, [isPrimaryWindow, signalBreakStart]);
+
+  const handleStartBreakNow = useCallback(() => {
+    void signalBreakStart();
+  }, [signalBreakStart]);
+
+  const backgroundImageSource =
+    settings?.backgroundImage?.uri || settings?.backgroundImage?.dataUrl || null;
+  const hasBackgroundImage = Boolean(backgroundImageSource);
 
   useEffect(() => {
-    if (!countingDown) {
-      // Resize window to full screen for break phase
-      const renderer = ipcRenderer as typeof ipcRenderer & {
-        invokeBreakWindowResize?: () => Promise<void>;
-      };
-      if (renderer.invokeBreakWindowResize) {
-        renderer.invokeBreakWindowResize();
-      }
+    if (countingDown) {
+      setBreakWindowReady(false);
+      return;
     }
-  }, [countingDown, settings]);
+
+    let cancelled = false;
+    setBreakWindowReady(hasBackgroundImage ? false : true);
+
+    const renderer = ipcRenderer as typeof ipcRenderer & {
+      invokeBreakWindowResize?: () => Promise<void>;
+    };
+
+    const resizeWindow = async () => {
+      try {
+        if (renderer.invokeBreakWindowResize) {
+          await renderer.invokeBreakWindowResize();
+        }
+      } catch (error) {
+        console.warn("Failed to resize break window", error);
+      } finally {
+        if (!cancelled && hasBackgroundImage) {
+          setBreakWindowReady(true);
+        }
+      }
+    };
+
+    resizeWindow();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [countingDown, hasBackgroundImage]);
 
   useEffect(() => {
     if (closing) {
@@ -107,7 +187,19 @@ export default function Break() {
     setClosing(true);
   }, []);
 
-  const handleEndBreak = useCallback(async () => {
+  const handleEndBreak = useCallback(async (durationMs?: number) => {
+    if (
+      typeof durationMs === "number" &&
+      Number.isFinite(durationMs) &&
+      durationMs >= 0
+    ) {
+      try {
+        await ipcRenderer.invokeCompleteBreakTracking(durationMs);
+      } catch (error) {
+        console.warn("Failed to record break duration", error);
+      }
+    }
+
     // Only play end sound from primary window
     const urlParams = new URLSearchParams(window.location.search);
     const windowId = urlParams.get("windowId");
@@ -125,15 +217,59 @@ export default function Break() {
     return null;
   }
 
+  const allowPostponeEnabled = allowPostpone === true;
+  const postponeBreakEnabled =
+    settings.postponeBreakEnabled &&
+    allowPostponeEnabled &&
+    !settings.immediatelyStartBreaks;
+  const skipBreakEnabled =
+    settings.skipBreakEnabled &&
+    allowPostponeEnabled &&
+    !settings.immediatelyStartBreaks;
+  const postponeLimitReached =
+    !allowPostponeEnabled &&
+    (settings.postponeBreakEnabled || settings.skipBreakEnabled) &&
+    !settings.immediatelyStartBreaks;
+
   const fallbackBreakMessage = normalizeBreakMessage(settings.breakMessage);
   const breakMessageForDisplay =
     currentBreakMessage ?? fallbackBreakMessage;
+  const rootStyle: CSSProperties = {};
+
+  rootStyle.backgroundColor = settings.backgroundColor;
+
+  if (backgroundImageSource && breakWindowReady) {
+    rootStyle.backgroundImage = `url(${backgroundImageSource})`;
+    rootStyle.backgroundSize = "cover";
+    rootStyle.backgroundPosition = "center";
+    rootStyle.backgroundRepeat = "no-repeat";
+  }
+
+  const hasVisibleBackgroundImage = hasBackgroundImage && breakWindowReady;
+
+  const countdownSurfaceColor = hasBackgroundImage
+    ? createRgba(settings.backgroundColor, 0.88)
+    : settings.backgroundColor;
+
+  const breakSurfaceColor = hasVisibleBackgroundImage
+    ? createRgba(settings.backgroundColor, 0.88)
+    : settings.backgroundColor;
+
+  const countdownRootStyle: CSSProperties = hasBackgroundImage
+    ? {}
+    : { backgroundColor: settings.backgroundColor };
 
   if (countingDown) {
     return (
-      <div
+      <motion.div
         className="h-full flex items-center justify-center"
-        style={{ backgroundColor: "transparent" }}
+        style={countdownRootStyle}
+        initial={{ opacity: 1 }}
+        animate={{ opacity: closing ? 0 : 1 }}
+        transition={{
+          duration: 0.5,
+          ease: [0.25, 0.46, 0.45, 0.94],
+        }}
       >
         {ready && !closing && (
           <BreakNotification
@@ -141,25 +277,30 @@ export default function Break() {
             onPostponeBreak={handlePostponeBreak}
             onSkipBreak={handleSkipBreak}
             onStartBreakNow={handleStartBreakNow}
-            postponeBreakEnabled={
-              settings.postponeBreakEnabled &&
-              allowPostpone &&
-              !settings.immediatelyStartBreaks
-            }
-            skipBreakEnabled={
-              settings.skipBreakEnabled && !settings.immediatelyStartBreaks
-            }
+            postponeBreakEnabled={postponeBreakEnabled}
+            skipBreakEnabled={skipBreakEnabled}
+            postponeLimitReached={postponeLimitReached}
             timeSinceLastBreak={timeSinceLastBreak}
             textColor={settings.textColor}
-            backgroundColor={settings.backgroundColor}
+            backgroundColor={countdownSurfaceColor}
+            backgroundImage={backgroundImageSource}
           />
         )}
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div className="h-full flex items-center justify-center relative">
+    <motion.div
+      className="h-full flex items-center justify-center relative"
+      style={rootStyle}
+      initial={{ opacity: hasBackgroundImage ? 0 : 1 }}
+      animate={{ opacity: closing || (hasBackgroundImage && !breakWindowReady) ? 0 : 1 }}
+      transition={{
+        duration: 0.5,
+        ease: [0.25, 0.46, 0.45, 0.94],
+      }}
+    >
       {settings.showBackdrop && (
         <motion.div
           className="absolute inset-0"
@@ -169,10 +310,12 @@ export default function Break() {
           initial={{ opacity: 0 }}
           transition={{
             duration: 0.5,
-            delay: closing ? 0.3 : 0,
+            ease: [0.25, 0.46, 0.45, 0.94],
           }}
           style={{
-            backgroundColor: createDarkerRgba(settings.backgroundColor, 1),
+            backgroundColor: hasVisibleBackgroundImage
+              ? "rgb(0, 0, 0)"
+              : createDarkerRgba(settings.backgroundColor, 1),
           }}
         />
       )}
@@ -189,7 +332,8 @@ export default function Break() {
         }}
         style={{
           color: settings.textColor,
-          backgroundColor: settings.backgroundColor,
+          backgroundColor: breakSurfaceColor,
+          backdropFilter: hasVisibleBackgroundImage ? "blur(6px)" : undefined,
         }}
       >
         {ready && (
@@ -208,6 +352,6 @@ export default function Break() {
           />
         )}
       </motion.div>
-    </div>
+    </motion.div>
   );
 }

@@ -152,6 +152,15 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle(IpcChannel.BreakWindowReady, (event: IpcMainInvokeEvent): void => {
+  log.info(IpcChannel.BreakWindowReady);
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window && !window.isDestroyed()) {
+    window.showInactive();
+    window.moveTop();
+  }
+});
+
 ipcMain.handle(IpcChannel.TimeSinceLastBreakGet, (): number | null => {
   log.info(IpcChannel.TimeSinceLastBreakGet);
   return getTimeSinceLastBreak();

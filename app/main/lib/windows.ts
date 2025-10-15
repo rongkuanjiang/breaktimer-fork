@@ -42,7 +42,7 @@ export function createSettingsWindow(): void {
   }
 
   settingsWindow = new BrowserWindow({
-    title: "BreakTimer — Settings",
+    title: "BreakTimer - Settings",
     show: false,
     width: 580,
     minWidth: 580,
@@ -115,6 +115,7 @@ export function createBreakWindows(): void {
       show: false,
       autoHideMenuBar: true,
       frame: false,
+      backgroundColor: "#00000000",
       x: display.bounds.x + display.bounds.width / 2 - notificationWidth / 2,
       y: display.bounds.y + 50,
       width: notificationWidth,
@@ -142,16 +143,34 @@ export function createBreakWindows(): void {
 
     breakWindow.loadURL(getBrowserWindowUrl("break", windowIndex));
 
+    let fallbackShowTimeout: NodeJS.Timeout | null = null;
+
     breakWindow.on("ready-to-show", () => {
       if (!breakWindow) {
         throw new Error('"breakWindow" is not defined');
       }
 
-      // Show as inactive to avoid stealing focus
-      breakWindow.showInactive();
+      fallbackShowTimeout = setTimeout(() => {
+        if (!breakWindow || breakWindow.isDestroyed()) return;
+        if (!breakWindow.isVisible()) {
+          breakWindow.showInactive();
+          breakWindow.moveTop();
+        }
+      }, 2000);
+    });
+
+    breakWindow.once("show", () => {
+      if (fallbackShowTimeout) {
+        clearTimeout(fallbackShowTimeout);
+        fallbackShowTimeout = null;
+      }
     });
 
     breakWindow.on("closed", () => {
+      if (fallbackShowTimeout) {
+        clearTimeout(fallbackShowTimeout);
+        fallbackShowTimeout = null;
+      }
       if (process.platform === "darwin") {
         // Ensure that focus is returned to the previous app when break windows
         // close.

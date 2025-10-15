@@ -18,7 +18,7 @@ interface BreakProgressProps {
   breakMessage: BreakMessageContent;
   breakTitle: string;
   endBreakEnabled: boolean;
-  onEndBreak: () => void;
+  onEndBreak: (durationMs?: number) => void | Promise<void>;
   settings: Settings;
   uiColor: string;
   titleColor: string;
@@ -346,6 +346,11 @@ export function BreakProgress({
     });
   }, [normalizedSearchTerm, totalMatches]);
 
+  const handleEndBreakRequest = useCallback(() => {
+    const elapsedMs = Math.max(0, Date.now() - breakStartTime.getTime());
+    onEndBreak(elapsedMs);
+  }, [breakStartTime, onEndBreak]);
+
   useEffect(() => {
     if (normalizedSearchTerm.length === 0) {
       if (activeMatchIndex !== 0) {
@@ -483,25 +488,47 @@ export function BreakProgress({
       );
     }
 
-    (async () => {
-      // Use shared end time if available (from synchronized break start), otherwise calculate it
-      let breakEndTime: moment.Moment;
-      if (sharedBreakEndTime) {
-        breakEndTime = moment(sharedBreakEndTime);
-      } else {
-        const lengthSeconds = await ipcRenderer.invokeGetBreakLength();
-        breakEndTime = moment().add(lengthSeconds, "seconds");
+    const MINIMUM_REMAINING_BUFFER_MS = 500;
+
+    const resolveBreakTiming = async () => {
+      const now = moment();
+
+      if (sharedBreakEndTime !== null) {
+        const normalized = Number(sharedBreakEndTime);
+        if (Number.isFinite(normalized)) {
+          const candidate = moment(normalized);
+          const remainingMs = candidate.diff(now, "milliseconds");
+          if (candidate.isValid() && remainingMs > MINIMUM_REMAINING_BUFFER_MS) {
+            return {
+              end: candidate,
+              durationMs: remainingMs,
+            };
+          }
+        }
       }
 
-      const startMsRemaining = moment(breakEndTime).diff(
-        moment(),
-        "milliseconds",
-      );
+      const lengthSecondsRaw = await ipcRenderer.invokeGetBreakLength();
+      const fallbackSeconds =
+        typeof lengthSecondsRaw === "number" && Number.isFinite(lengthSecondsRaw)
+          ? Math.max(1, Math.round(lengthSecondsRaw))
+          : 1;
+
+      const fallbackEnd = moment().add(fallbackSeconds, "seconds");
+      return {
+        end: fallbackEnd,
+        durationMs: fallbackSeconds * 1000,
+      };
+    };
+
+    (async () => {
+      const { end: breakEndMoment, durationMs } = await resolveBreakTiming();
+      const baselineDurationMs =
+        Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 1000;
 
       const tick = () => {
         const now = moment();
 
-        if (now > moment(breakEndTime)) {
+        if (now.isSameOrAfter(breakEndMoment)) {
           // Always track break completion, regardless of which window triggers it
           const breakDurationMs =
             new Date().getTime() - breakStartTime.getTime();
@@ -511,12 +538,25 @@ export function BreakProgress({
           return;
         }
 
-        const msRemaining = moment(breakEndTime).diff(now, "milliseconds");
-        setProgress(1 - msRemaining / startMsRemaining);
+        const rawRemainingMs = breakEndMoment.diff(now, "milliseconds");
+        const msRemaining =
+          Number.isFinite(rawRemainingMs) && rawRemainingMs > 0
+            ? rawRemainingMs
+            : 0;
+        const totalSeconds = Math.floor(msRemaining / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        setProgress(
+          baselineDurationMs > 0
+            ? 1 - msRemaining / baselineDurationMs
+            : 1,
+        );
         setTimeRemaining({
-          hours: Math.floor(msRemaining / 1000 / 3600),
-          minutes: Math.floor(msRemaining / 1000 / 60),
-          seconds: (msRemaining / 1000) % 60,
+          hours,
+          minutes,
+          seconds,
         });
 
         if (!isClosingRef.current) {
@@ -605,7 +645,7 @@ export function BreakProgress({
           {endBreakEnabled && (
             <Button
               className="!bg-transparent hover:!bg-black/10 active:!bg-black/20 border-white/20"
-              onClick={onEndBreak}
+              onClick={handleEndBreakRequest}
               variant="outline"
               style={{
                 color: uiColor,
@@ -677,14 +717,20 @@ export function BreakProgress({
                 className="text-sm font-medium opacity-60 flex-shrink-0 tabular-nums flex items-center gap-0.5"
                 style={{ color: uiColor }}
               >
+                {timeRemaining.hours > 0 && (
+                  <>
+                    <span style={{ color: uiColor }}>
+                      {String(timeRemaining.hours).padStart(2, "0")}
+                    </span>
+                    <span style={{ color: uiColor }}>:</span>
+                  </>
+                )}
                 <span style={{ color: uiColor }}>
-                  {String(
-                    Math.floor(timeRemaining.hours * 60 + timeRemaining.minutes),
-                  ).padStart(2, "0")} {" "}
+                  {String(timeRemaining.minutes).padStart(2, "0")}
                 </span>
                 <span style={{ color: uiColor }}>:</span>
                 <span style={{ color: uiColor }}>
-                  {String(Math.floor(timeRemaining.seconds)).padStart(2, "0")}
+                  {String(timeRemaining.seconds).padStart(2, "0")}
                 </span>
               </div>
             </div>

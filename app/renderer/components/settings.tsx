@@ -16,6 +16,74 @@ import ThemeCard from "./settings/theme-card";
 import WorkingHoursSettings from "./settings/working-hours";
 import WelcomeModal from "./welcome-modal";
 
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+
+  if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
+    return true;
+  }
+
+  if (a === null || b === null) {
+    return false;
+  }
+
+  if (typeof a !== typeof b) {
+    return false;
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+
+    for (let index = 0; index < a.length; index += 1) {
+      if (!deepEqual(a[index], b[index])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return false;
+  }
+
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() === b.getTime();
+  }
+
+  if (typeof a === "object" && typeof b === "object") {
+    const aRecord = a as Record<string, unknown>;
+    const bRecord = b as Record<string, unknown>;
+    const keys = new Set([...Object.keys(aRecord), ...Object.keys(bRecord)]);
+
+    for (const key of keys) {
+      if (!deepEqual(aRecord[key], bRecord[key])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function areSettingsEqual(a: Settings | null, b: Settings | null): boolean {
+  if (a === b) {
+    return true;
+  }
+
+  if (a === null || b === null) {
+    return false;
+  }
+
+  return deepEqual(a, b);
+}
+
 export default function SettingsEl() {
   const [settingsDraft, setSettingsDraft] = useState<Settings | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -34,7 +102,7 @@ export default function SettingsEl() {
   }, []);
 
   const dirty = useMemo(() => {
-    return JSON.stringify(settingsDraft) !== JSON.stringify(settings);
+    return !areSettingsEqual(settingsDraft, settings);
   }, [settings, settingsDraft]);
 
   if (settings === null || settingsDraft === null) {
@@ -99,6 +167,7 @@ export default function SettingsEl() {
       ...settingsDraft,
       textColor: "#ffffff",
       backgroundColor: "#16a085",
+      backgroundImage: null,
       backdropOpacity: 0.7,
       titleTextColor: "#ffffff",
       messageTextColor: "#ffffff",
@@ -124,9 +193,23 @@ export default function SettingsEl() {
   };
 
   const handleSave = async () => {
-    await ipcRenderer.invokeSetSettings(settingsDraft);
-    toast("Settings saved");
-    setSettings(settingsDraft);
+    try {
+      await ipcRenderer.invokeSetSettings(settingsDraft);
+      toast("Settings saved");
+      setSettings(settingsDraft);
+    } catch (error) {
+      // Log to devtools for debugging while keeping UI feedback user-friendly
+      console.error("Failed to save settings", error);
+      const baseMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to save settings.";
+      const details =
+        typeof (error as { details?: string }).details === "string"
+          ? (error as { details: string }).details
+          : null;
+      toast(details ? `${baseMessage} (${details})` : baseMessage);
+    }
   };
 
   return (
