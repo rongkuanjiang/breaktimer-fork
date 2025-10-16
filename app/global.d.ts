@@ -33,6 +33,11 @@ declare const processEnv: {
 
 declare const processPlatform: string;
 
+declare const webFrame: {
+  setZoomFactor?: (factor: number) => void;
+  getZoomFactor?: () => number;
+};
+
 declare module "*.scss" {
   const content: { [className: string]: string };
   export = content;

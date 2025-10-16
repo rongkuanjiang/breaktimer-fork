@@ -39,6 +39,7 @@ module.exports = [
         NodeJS: "readonly",
         // Electron globals
         ipcRenderer: "readonly",
+        webFrame: "readonly",
         processEnv: "readonly",
         processPlatform: "readonly",
         // React types
@@ -100,6 +101,7 @@ module.exports = [
         clearInterval: "readonly",
         // Electron globals
         ipcRenderer: "readonly",
+        webFrame: "readonly",
         processEnv: "readonly",
         processPlatform: "readonly",
       },

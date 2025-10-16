@@ -18,6 +18,10 @@ import { showNotification } from "./notifications";
 import { getSettings } from "./store";
 import { buildTray } from "./tray";
 import { createBreakWindows } from "./windows";
+import {
+  generateSequentialOrder,
+  sanitizeSequentialOrder,
+} from "./break-rotation";
 
 // Helper function to strip HTML tags from text
 function stripHtml(html: string): string {
@@ -26,34 +30,6 @@ function stripHtml(html: string): string {
     .replace(/<br\s*\/?>/gi, " ")
     .replace(/<[^>]*>/g, "")
     .trim();
-}
-
-function generateShuffledIndexes(length: number): number[] {
-  const indexes = Array.from({ length }, (_, i) => i);
-  for (let i = indexes.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indexes[i], indexes[j]] = [indexes[j], indexes[i]];
-  }
-  return indexes;
-}
-
-function sanitizeOrder(
-  order: number[] | undefined,
-  length: number,
-): number[] | null {
-  if (!Array.isArray(order) || order.length !== length) {
-    return null;
-  }
-
-  const seen = new Set<number>();
-  for (const value of order) {
-    if (!Number.isInteger(value) || value < 0 || value >= length || seen.has(value)) {
-      return null;
-    }
-    seen.add(value);
-  }
-
-  return order.slice();
 }
 
 let powerMonitor: PowerMonitor;
@@ -254,9 +230,9 @@ function doBreak(): void {
           : 0;
       const currentIndex = ((idxRaw % totalMessages) + totalMessages) % totalMessages;
 
-      let order = sanitizeOrder(settings.breakMessagesOrder, totalMessages);
+      let order = sanitizeSequentialOrder(settings.breakMessagesOrder, totalMessages);
       if (!order) {
-        order = generateShuffledIndexes(totalMessages);
+        order = generateSequentialOrder(totalMessages);
       }
 
       const messageIndex = order[currentIndex] ?? 0;
@@ -265,7 +241,7 @@ function doBreak(): void {
       let nextIndex = currentIndex + 1;
       if (nextIndex >= totalMessages) {
         nextIndex = 0;
-        order = generateShuffledIndexes(totalMessages);
+        order = generateSequentialOrder(totalMessages);
       }
 
       // Persist next index and current order. We update settings silently without resetting breaks

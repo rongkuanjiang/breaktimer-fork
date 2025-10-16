@@ -88,6 +88,7 @@ export default function SettingsEl() {
   const [settingsDraft, setSettingsDraft] = useState<Settings | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   useEffect(() => {
     (async () => {
@@ -100,6 +101,108 @@ export default function SettingsEl() {
       setShowWelcomeModal(!appInitialized);
     })();
   }, []);
+
+  useEffect(() => {
+    const MIN_ZOOM = 0.8;
+    const MAX_ZOOM = 1.5;
+    const ZOOM_STEP = 0.1;
+    const increaseKeys = new Set(["=", "+", "Add"]);
+    const decreaseKeys = new Set(["-", "_", "Subtract"]);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) {
+        return;
+      }
+
+      if (increaseKeys.has(event.key)) {
+        event.preventDefault();
+        setZoomLevel((current) =>
+          Math.min(MAX_ZOOM, parseFloat((current + ZOOM_STEP).toFixed(2))),
+        );
+        return;
+      }
+
+      if (decreaseKeys.has(event.key)) {
+        event.preventDefault();
+        setZoomLevel((current) =>
+          Math.max(MIN_ZOOM, parseFloat((current - ZOOM_STEP).toFixed(2))),
+        );
+        return;
+      }
+
+      if (event.key === "0") {
+        event.preventDefault();
+        setZoomLevel(1);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const hasWebFrame =
+      typeof webFrame !== "undefined" &&
+      typeof webFrame.getZoomFactor === "function" &&
+      typeof webFrame.setZoomFactor === "function";
+
+    if (!hasWebFrame) {
+      const body = document.body;
+      if (!body) {
+        return;
+      }
+
+      const previousZoom = body.style.zoom;
+      const previousBackground = body.style.backgroundColor;
+      body.style.backgroundColor = "var(--background)";
+
+      return () => {
+        if (previousZoom) {
+          body.style.zoom = previousZoom;
+        } else {
+          body.style.removeProperty("zoom");
+        }
+
+        if (previousBackground) {
+          body.style.backgroundColor = previousBackground;
+        } else {
+          body.style.removeProperty("background-color");
+        }
+      };
+    }
+
+    const setZoom = webFrame.setZoomFactor!;
+    const getZoom = webFrame.getZoomFactor!;
+    const initialZoom = getZoom();
+    setZoomLevel(initialZoom);
+
+    return () => {
+      setZoom(initialZoom);
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasWebFrame =
+      typeof webFrame !== "undefined" &&
+      typeof webFrame.setZoomFactor === "function" &&
+      typeof webFrame.getZoomFactor === "function";
+
+    if (hasWebFrame) {
+      const setZoom = webFrame.setZoomFactor!;
+      setZoom(zoomLevel);
+      return;
+    }
+
+    const body = document.body;
+    if (!body) {
+      return;
+    }
+
+    body.style.setProperty("zoom", zoomLevel.toString());
+    return () => {
+      body.style.removeProperty("zoom");
+    };
+  }, [zoomLevel]);
 
   const dirty = useMemo(() => {
     return !areSettingsEqual(settingsDraft, settings);
@@ -193,10 +296,16 @@ export default function SettingsEl() {
   };
 
   const handleSave = async () => {
+    if (!settingsDraft) {
+      return;
+    }
+
     try {
       await ipcRenderer.invokeSetSettings(settingsDraft);
+      const updatedSettings = (await ipcRenderer.invokeGetSettings()) as Settings;
       toast("Settings saved");
-      setSettings(settingsDraft);
+      setSettingsDraft(updatedSettings);
+      setSettings(updatedSettings);
     } catch (error) {
       // Log to devtools for debugging while keeping UI feedback user-friendly
       console.error("Failed to save settings", error);

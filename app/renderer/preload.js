@@ -6,11 +6,19 @@
  * information.
  */
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 process.once("loaded", () => {
   contextBridge.exposeInMainWorld("processEnv", { ...process.env });
   contextBridge.exposeInMainWorld("processPlatform", process.platform);
+  contextBridge.exposeInMainWorld("webFrame", {
+    setZoomFactor: (factor) => {
+      webFrame.setZoomFactor(factor);
+    },
+    getZoomFactor: () => {
+      return webFrame.getZoomFactor();
+    },
+  });
   contextBridge.exposeInMainWorld("ipcRenderer", {
     invokeBreakPostpone: (action) => {
       return ipcRenderer.invoke("BREAK_POSTPONE", action);

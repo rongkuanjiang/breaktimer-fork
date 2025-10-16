@@ -120,6 +120,23 @@ export default function Break() {
     }
   }, []);
 
+  useEffect(() => {
+    // Ensure skipping the countdown still notifies the main process once
+    if (countingDown || !ready || !isPrimaryWindow) {
+      return;
+    }
+
+    if (hasSignaledBreakStartRef.current) {
+      return;
+    }
+
+    if (sharedBreakEndTime !== null) {
+      return;
+    }
+
+    void signalBreakStart();
+  }, [countingDown, ready, isPrimaryWindow, sharedBreakEndTime, signalBreakStart]);
+
   const handleCountdownOver = useCallback(() => {
     if (isPrimaryWindow) {
       void signalBreakStart();

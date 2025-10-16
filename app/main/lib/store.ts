@@ -7,6 +7,7 @@ import {
   BreakMessageAttachment,
   BreakMessageContent,
   MessageColorEffect,
+  BreakMessagesMode,
 } from "../../types/settings";
 import { setAutoLauch } from "./auto-launch";
 import { initBreaks } from "./breaks";
@@ -15,6 +16,10 @@ import {
   deleteAttachment,
   saveAttachmentFromDataUrl,
 } from "./attachments";
+import {
+  generateSequentialOrder,
+  sanitizeSequentialOrder,
+} from "./break-rotation";
 
 class AttachmentPersistenceError extends Error {
   attachmentName?: string;
@@ -412,6 +417,59 @@ function persistBackgroundImage(
   return null;
 }
 
+function normalizeSequentialIndex(value: unknown, orderLength: number): number {
+  if (!Number.isInteger(value) || orderLength <= 0) {
+    return 0;
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  const normalized = ((numericValue % orderLength) + orderLength) % orderLength;
+  return normalized;
+}
+
+function resolveSequentialRotationState(
+  currentSettings: Settings,
+  incomingSettings: Settings,
+  messageCount: number,
+): { nextIndex: number; order: number[] } {
+  if (messageCount <= 0) {
+    return { nextIndex: 0, order: [] };
+  }
+
+  const currentOrder = sanitizeSequentialOrder(
+    currentSettings.breakMessagesOrder,
+    messageCount,
+  );
+  if (currentOrder) {
+    const nextIndex = normalizeSequentialIndex(
+      currentSettings.breakMessagesNextIndex,
+      currentOrder.length,
+    );
+    return { nextIndex, order: currentOrder };
+  }
+
+  const incomingOrder = sanitizeSequentialOrder(
+    incomingSettings.breakMessagesOrder,
+    messageCount,
+  );
+  if (incomingOrder) {
+    const nextIndex = normalizeSequentialIndex(
+      incomingSettings.breakMessagesNextIndex,
+      incomingOrder.length,
+    );
+    return { nextIndex, order: incomingOrder };
+  }
+
+  return {
+    nextIndex: 0,
+    order: generateSequentialOrder(messageCount),
+  };
+}
+
 const store = new Store({
   defaults: {
     settings: defaultSettings,
@@ -492,14 +550,35 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
     const messageColorEffect =
       settings.messageColorEffect || MessageColorEffect.Static;
 
+    const breakMessagesMode =
+      settings.breakMessagesMode ??
+      currentSettings.breakMessagesMode ??
+      BreakMessagesMode.Random;
+
     const nextSettings: Settings = {
       ...settings,
       titleTextColor,
       messageTextColor,
       messageColorEffect,
+      breakMessagesMode,
       breakMessages: persistedMessages,
       backgroundImage: persistedBackgroundImage,
     };
+
+    if (resetBreaks) {
+      if (nextSettings.breakMessagesMode === BreakMessagesMode.Sequential) {
+        const { nextIndex, order } = resolveSequentialRotationState(
+          currentSettings,
+          nextSettings,
+          persistedMessages.length,
+        );
+        nextSettings.breakMessagesNextIndex = nextIndex;
+        nextSettings.breakMessagesOrder = order;
+      } else {
+        nextSettings.breakMessagesNextIndex = 0;
+        nextSettings.breakMessagesOrder = [];
+      }
+    }
 
     const currentAttachmentIds = collectAttachmentIds(currentSettings.breakMessages);
     if (currentSettings.backgroundImage?.id) {
