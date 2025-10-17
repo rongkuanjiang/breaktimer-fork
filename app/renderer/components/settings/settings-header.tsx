@@ -29,8 +29,8 @@ export default function SettingsHeader(props: Props) {
             processEnv.SNAP === undefined ? "grid-cols-4" : "grid-cols-3"
           }`}
         >
-          <TabsTrigger value="break-settings">General</TabsTrigger>
-          <TabsTrigger value="working-hours">Working Hours</TabsTrigger>
+          <TabsTrigger value="break-behavior">Break Behavior</TabsTrigger>
+          <TabsTrigger value="messages">Messages</TabsTrigger>
           <TabsTrigger value="customization">Customization</TabsTrigger>
           {processEnv.SNAP === undefined && (
             <TabsTrigger value="system">System</TabsTrigger>

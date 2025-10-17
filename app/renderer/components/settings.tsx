@@ -6,6 +6,7 @@ import AdvancedCard from "./settings/advanced-card";
 import AudioCard from "./settings/audio-card";
 import BackdropCard from "./settings/backdrop-card";
 import BreaksCard from "./settings/breaks-card";
+import MessagesCard from "./settings/messages-card";
 import SettingsCard from "./settings/settings-card";
 import SettingsHeader from "./settings/settings-header";
 import SkipCard from "./settings/skip-card";
@@ -324,12 +325,12 @@ export default function SettingsEl() {
   return (
     <div className="h-screen w-full flex flex-col bg-background">
       <Tabs
-        defaultValue="break-settings"
+        defaultValue="break-behavior"
         className="w-full h-full flex flex-col"
       >
         <SettingsHeader handleSave={handleSave} showSave={dirty} />
         <div className="flex-1 overflow-auto p-6 min-h-0">
-          <TabsContent value="break-settings" className="m-0 space-y-8">
+          <TabsContent value="break-behavior" className="m-0 space-y-8">
             <BreaksCard
               settingsDraft={settingsDraft}
               onNotificationTypeChange={handleNotificationTypeChange}
@@ -360,9 +361,6 @@ export default function SettingsEl() {
               settingsDraft={settingsDraft}
               onSwitchChange={handleSwitchChange}
             />
-          </TabsContent>
-
-          <TabsContent value="working-hours" className="m-0 space-y-6">
             <SettingsCard
               title="Working Hours"
               helperText="Only show breaks during your configured work schedule."
@@ -378,6 +376,13 @@ export default function SettingsEl() {
                 setSettingsDraft={setSettingsDraft}
               />
             </SettingsCard>
+          </TabsContent>
+
+          <TabsContent value="messages" className="m-0 space-y-8">
+            <MessagesCard
+              settingsDraft={settingsDraft}
+              onTextChange={handleTextChange}
+            />
           </TabsContent>
 
           <TabsContent value="customization" className="m-0 space-y-8">
