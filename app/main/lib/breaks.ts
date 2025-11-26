@@ -1,7 +1,12 @@
 import { PowerMonitor } from "electron";
 import log from "electron-log";
 import moment from "moment";
-import { BreakTime } from "../../types/breaks";
+import {
+  BreakMessageNavigationState,
+  BreakMessageSwitchResult,
+  BreakMessageUpdatePayload,
+  BreakTime,
+} from "../../types/breaks";
 import { IpcChannel } from "../../types/ipc";
 import {
   DayConfig,
@@ -32,6 +37,134 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+interface NextBreakMessageResult {
+  message: BreakMessageContent;
+  updatedSettings?: Settings | null;
+}
+
+async function determineNextBreakMessage(
+  settings: Settings,
+): Promise<NextBreakMessageResult> {
+  const availableMessages = normalizeBreakMessages(settings.breakMessages);
+
+  if (availableMessages.length > 0) {
+    if (settings.breakMessagesMode === BreakMessagesMode.Sequential) {
+      const totalMessages = availableMessages.length;
+      const idxRaw =
+        typeof settings.breakMessagesNextIndex === "number"
+          ? settings.breakMessagesNextIndex
+          : 0;
+      const currentIndex =
+        ((idxRaw % totalMessages) + totalMessages) % totalMessages;
+
+      let order = sanitizeSequentialOrder(
+        settings.breakMessagesOrder,
+        totalMessages,
+      );
+      if (!order) {
+        order = generateSequentialOrder(totalMessages);
+      }
+
+      const messageIndex = order[currentIndex] ?? 0;
+      const message = availableMessages[messageIndex] ?? availableMessages[0];
+
+      let nextIndex = currentIndex + 1;
+      if (nextIndex >= totalMessages) {
+        nextIndex = 0;
+        order = generateSequentialOrder(totalMessages);
+      }
+
+      const updated: Settings = {
+        ...settings,
+        breakMessagesNextIndex: nextIndex,
+        breakMessagesOrder: order,
+        breakMessages: availableMessages,
+      };
+
+      return {
+        message,
+        updatedSettings: updated,
+      };
+    }
+
+    const idx = Math.floor(Math.random() * availableMessages.length);
+    return {
+      message: availableMessages[idx],
+    };
+  }
+
+  return {
+    message: normalizeBreakMessage(settings.breakMessage),
+  };
+}
+
+async function updateCurrentBreakMessageFromSettings(
+  settings: Settings,
+): Promise<BreakMessageContent> {
+  const { message, updatedSettings } =
+    await determineNextBreakMessage(settings);
+  currentBreakMessage = message;
+
+  if (updatedSettings) {
+    // Persist next index and current order. We update settings silently without resetting breaks
+    try {
+      const { setSettings } = require("./store");
+      await setSettings(updatedSettings, false);
+    } catch (err) {
+      log.warn("Failed to persist break message rotation state", err);
+    }
+  }
+
+  return message;
+}
+
+function resolveMessageDurationMs(
+  settings: Settings,
+  message: BreakMessageContent | null,
+): number {
+  const fallbackSecondsRaw = Number(settings.breakLengthSeconds);
+  const fallbackSeconds = Number.isFinite(fallbackSecondsRaw)
+    ? Math.max(1, Math.round(fallbackSecondsRaw))
+    : 1;
+
+  if (!message) {
+    return fallbackSeconds * 1000;
+  }
+
+  const overrideSecondsRaw = message.durationSeconds;
+  if (
+    typeof overrideSecondsRaw === "number" &&
+    Number.isFinite(overrideSecondsRaw) &&
+    overrideSecondsRaw > 0
+  ) {
+    const normalized = Math.max(1, Math.round(overrideSecondsRaw));
+    return normalized * 1000;
+  }
+
+  return fallbackSeconds * 1000;
+}
+
+function cloneBreakMessageContent(
+  message: BreakMessageContent | null,
+): BreakMessageContent | null {
+  if (!message) {
+    return null;
+  }
+
+  const cloned: BreakMessageContent = {
+    text: message.text,
+    attachments: message.attachments.map((attachment) => ({
+      ...attachment,
+    })),
+  };
+
+  if (message.durationSeconds !== undefined) {
+    cloned.durationSeconds = message.durationSeconds;
+  }
+
+  return cloned;
+}
+
 let powerMonitor: PowerMonitor;
 let breakTime: BreakTime = null;
 let havingBreak = false;
@@ -45,6 +178,144 @@ let lastCompletedBreakTime: Date = new Date();
 let currentBreakStartTime: Date | null = null;
 let hasSkippedOrSnoozedSinceLastBreak = false;
 let currentBreakMessage: BreakMessageContent | null = null;
+let currentBreakEndTimestamp: number | null = null;
+let currentBreakRemainingMs: number | null = null;
+let currentBreakTotalDurationMs: number | null = null;
+let breakCountdownPaused = false;
+
+interface BreakMessageHistoryEntry {
+  message: BreakMessageContent;
+  durationMs: number;
+}
+
+let breakMessageHistory: BreakMessageHistoryEntry[] = [];
+let breakMessageHistoryIndex = -1;
+
+function clearBreakMessageHistory(): void {
+  breakMessageHistory = [];
+  breakMessageHistoryIndex = -1;
+}
+
+function recordBreakMessageInHistory(
+  message: BreakMessageContent | null,
+  durationMs: number,
+): void {
+  const clone = cloneBreakMessageContent(message);
+  if (!clone) {
+    return;
+  }
+
+  const normalizedDuration = Math.max(1, Math.round(durationMs));
+
+  if (breakMessageHistoryIndex < breakMessageHistory.length - 1) {
+    breakMessageHistory = breakMessageHistory.slice(
+      0,
+      Math.max(0, breakMessageHistoryIndex + 1),
+    );
+  }
+
+  breakMessageHistory.push({
+    message: clone,
+    durationMs: normalizedDuration,
+  });
+  breakMessageHistoryIndex = breakMessageHistory.length - 1;
+}
+
+function updateCurrentHistoryEntryDuration(durationMs: number): void {
+  if (
+    breakMessageHistoryIndex < 0 ||
+    breakMessageHistoryIndex >= breakMessageHistory.length
+  ) {
+    return;
+  }
+
+  const normalizedDuration = Math.max(1, Math.round(durationMs));
+  const currentEntry = breakMessageHistory[breakMessageHistoryIndex];
+
+  breakMessageHistory[breakMessageHistoryIndex] = {
+    ...currentEntry,
+    durationMs: normalizedDuration,
+  };
+}
+
+function getHistoryEntry(index: number): BreakMessageHistoryEntry | null {
+  if (index < 0 || index >= breakMessageHistory.length) {
+    return null;
+  }
+  return breakMessageHistory[index];
+}
+
+function getCurrentHistoryEntry(): BreakMessageHistoryEntry | null {
+  return getHistoryEntry(breakMessageHistoryIndex);
+}
+
+function getBreakMessageNavigationState(
+  settings: Settings,
+): BreakMessageNavigationState {
+  const hasPrevious = breakMessageHistoryIndex > 0;
+  const hasFutureHistory =
+    breakMessageHistoryIndex >= 0 &&
+    breakMessageHistoryIndex < breakMessageHistory.length - 1;
+  const availableMessages = normalizeBreakMessages(settings.breakMessages);
+  const hasMultipleMessages = availableMessages.length > 1;
+
+  return {
+    hasPrevious,
+    hasNext: hasFutureHistory || hasMultipleMessages,
+  };
+}
+
+function createBreakMessageSwitchResult(
+  durationMs: number,
+  settings: Settings,
+): BreakMessageSwitchResult {
+  return {
+    message: getCurrentBreakMessage(),
+    durationMs,
+    ...getBreakMessageNavigationState(settings),
+  };
+}
+
+function broadcastBreakMessageUpdate(settings: Settings): void {
+  const payload: BreakMessageUpdatePayload = {
+    message: getCurrentBreakMessage(),
+    ...getBreakMessageNavigationState(settings),
+  };
+  sendIpc(IpcChannel.BreakMessageUpdate, payload);
+}
+
+function applyBreakMessageEntry(
+  entry: BreakMessageHistoryEntry,
+  settings: Settings,
+): BreakMessageSwitchResult {
+  const clone = cloneBreakMessageContent(entry.message);
+  currentBreakMessage = clone;
+
+  const targetDurationMs = Math.max(1, Math.round(entry.durationMs));
+
+  currentBreakTotalDurationMs = targetDurationMs;
+  currentBreakRemainingMs = targetDurationMs;
+
+  if (breakCountdownPaused) {
+    currentBreakEndTimestamp = null;
+    sendIpc(IpcChannel.BreakPause, {
+      remainingMs: targetDurationMs,
+      totalDurationMs: targetDurationMs,
+    });
+  } else {
+    const breakEndTime = Date.now() + targetDurationMs;
+    currentBreakEndTimestamp = breakEndTime;
+    breakCountdownPaused = false;
+    sendIpc(IpcChannel.BreakStart, {
+      breakEndTime,
+      totalDurationMs: targetDurationMs,
+    });
+  }
+
+  broadcastBreakMessageUpdate(settings);
+
+  return createBreakMessageSwitchResult(targetDurationMs, settings);
+}
 
 export function getBreakTime(): BreakTime {
   return breakTime;
@@ -55,7 +326,11 @@ export function getBreakLengthSeconds(): number {
 
   if (havingBreak) {
     const override = currentBreakMessage?.durationSeconds;
-    if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+    if (
+      typeof override === "number" &&
+      Number.isFinite(override) &&
+      override > 0
+    ) {
       return Math.max(1, Math.round(override));
     }
   }
@@ -92,6 +367,7 @@ export function completeBreakTracking(breakDurationMs: number): void {
       `Break completed [duration=${durationSeconds}s] [required=${requiredSeconds}s]`,
     );
   } else {
+    hasSkippedOrSnoozedSinceLastBreak = true;
     log.info(
       `Break too short [duration=${durationSeconds}s] [required=${requiredSeconds}s]`,
     );
@@ -100,13 +376,28 @@ export function completeBreakTracking(breakDurationMs: number): void {
   currentBreakStartTime = null;
 }
 
+function resetCurrentBreakTimerState(): void {
+  currentBreakEndTimestamp = null;
+  currentBreakRemainingMs = null;
+  currentBreakTotalDurationMs = null;
+  breakCountdownPaused = false;
+  clearBreakMessageHistory();
+}
+
 function zeroPad(n: number) {
   const nStr = String(n);
   return nStr.length === 1 ? `0${nStr}` : nStr;
 }
 
 function getSecondsFromSettings(seconds: number): number {
-  return seconds || 1; // can't be 0
+  if (
+    typeof seconds !== "number" ||
+    !Number.isFinite(seconds) ||
+    seconds <= 0
+  ) {
+    return 1; // fallback guard against invalid or non-positive values
+  }
+  return seconds;
 }
 
 function getIdleResetSeconds(): number {
@@ -130,12 +421,12 @@ function createIdleNotification() {
   let idleMinutes = 0;
   let idleHours = 0;
 
-  if (idleSeconds > 60) {
+  if (idleSeconds >= 60) {
     idleMinutes = Math.floor(idleSeconds / 60);
     idleSeconds -= idleMinutes * 60;
   }
 
-  if (idleMinutes > 60) {
+  if (idleMinutes >= 60) {
     idleHours = Math.floor(idleMinutes / 60);
     idleMinutes -= idleHours * 60;
   }
@@ -153,6 +444,10 @@ function createIdleNotification() {
 export function scheduleNextBreak(isPostpone = false): void {
   const settings: Settings = getSettings();
 
+  // Always reset the tray flag when scheduling a new break so future breaks
+  // don't inherit a manual trigger state.
+  startedFromTray = false;
+
   if (idleStart) {
     createIdleNotification();
     idleStart = null;
@@ -163,9 +458,10 @@ export function scheduleNextBreak(isPostpone = false): void {
     log.info("Break auto-detected via idle reset");
   }
 
-  const seconds = isPostpone
+  const rawSeconds = isPostpone
     ? settings.postponeLengthSeconds
     : settings.breakFrequencySeconds;
+  const seconds = getSecondsFromSettings(rawSeconds);
 
   breakTime = moment().add(seconds, "seconds");
 
@@ -178,14 +474,17 @@ export function scheduleNextBreak(isPostpone = false): void {
 
 export function endPopupBreak(): void {
   log.info("Break ended");
+  resetCurrentBreakTimerState();
   const existingBreakTime = breakTime;
   const now = moment();
   havingBreak = false;
   startedFromTray = false;
 
+  // Reset postpone count whenever a break ends, since the user completed it
+  postponedCount = 0;
+
   // If there's no future break scheduled, create a normal break
   if (!existingBreakTime || existingBreakTime <= now) {
-    postponedCount = 0;
     breakTime = null;
     scheduleNextBreak();
   }
@@ -200,8 +499,18 @@ export function getAllowPostpone(): boolean {
 }
 
 export function postponeBreak(action = "snoozed"): void {
+  const settings = getSettings();
+
+  if (settings.postponeLimit && postponedCount >= settings.postponeLimit) {
+    log.warn(
+      `Ignoring postponeBreak; postpone limit reached [limit=${settings.postponeLimit}] [count=${postponedCount}] [action=${action}]`,
+    );
+    return;
+  }
+
   postponedCount++;
   havingBreak = false;
+  resetCurrentBreakTimerState();
   hasSkippedOrSnoozedSinceLastBreak = true;
   log.info(`Break ${action} [count=${postponedCount}]`);
 
@@ -214,57 +523,32 @@ export function postponeBreak(action = "snoozed"): void {
   }
 }
 
-function doBreak(): void {
+async function doBreak(): Promise<void> {
   havingBreak = true;
   startBreakTracking();
 
   const settings: Settings = getSettings();
-  // Choose a break message according to mode
-  const availableMessages = normalizeBreakMessages(settings.breakMessages);
-  if (availableMessages.length > 0) {
-    if (settings.breakMessagesMode === BreakMessagesMode.Sequential) {
-      const totalMessages = availableMessages.length;
-      const idxRaw =
-        typeof settings.breakMessagesNextIndex === "number"
-          ? settings.breakMessagesNextIndex
-          : 0;
-      const currentIndex = ((idxRaw % totalMessages) + totalMessages) % totalMessages;
+  clearBreakMessageHistory();
+  const initialMessage = await updateCurrentBreakMessageFromSettings(settings);
 
-      let order = sanitizeSequentialOrder(settings.breakMessagesOrder, totalMessages);
-      if (!order) {
-        order = generateSequentialOrder(totalMessages);
-      }
-
-      const messageIndex = order[currentIndex] ?? 0;
-      currentBreakMessage = availableMessages[messageIndex] ?? availableMessages[0];
-
-      let nextIndex = currentIndex + 1;
-      if (nextIndex >= totalMessages) {
-        nextIndex = 0;
-        order = generateSequentialOrder(totalMessages);
-      }
-
-      // Persist next index and current order. We update settings silently without resetting breaks
-      try {
-        const updated: Settings = {
-          ...settings,
-          breakMessagesNextIndex: nextIndex,
-          breakMessagesOrder: order,
-          breakMessages: availableMessages,
-        };
-        const { setSettings } = require("./store");
-        setSettings(updated, false);
-      } catch (err) {
-        log.warn("Failed to persist break message rotation state", err);
-      }
-    } else {
-      // Random
-      const idx = Math.floor(Math.random() * availableMessages.length);
-      currentBreakMessage = availableMessages[idx];
-    }
-  } else {
-    currentBreakMessage = normalizeBreakMessage(settings.breakMessage);
+  // Guard: Check if break is still active after async operation
+  // User could have snoozed/skipped during the await
+  if (!havingBreak) {
+    log.warn(
+      "Break was cancelled during message determination, aborting doBreak",
+    );
+    currentBreakStartTime = null; // Clean up tracking state
+    return;
   }
+
+  const breakLengthSeconds = Math.max(1, Math.round(getBreakLengthSeconds()));
+  const breakDurationMs = breakLengthSeconds * 1000;
+  currentBreakTotalDurationMs = breakDurationMs;
+  currentBreakRemainingMs = breakDurationMs;
+  currentBreakEndTimestamp = null;
+  breakCountdownPaused = false;
+  recordBreakMessageInHistory(initialMessage, breakDurationMs);
+
   log.info(`Break started [type=${settings.notificationType}]`);
 
   if (settings.notificationType === NotificationType.Notification) {
@@ -280,8 +564,21 @@ function doBreak(): void {
         settings.breakSoundVolume,
       );
     }
+    completeBreakTracking(breakDurationMs);
+    resetCurrentBreakTimerState();
+    const existingBreakTime = breakTime;
+    const now = moment();
     havingBreak = false;
-    scheduleNextBreak();
+    startedFromTray = false;
+
+    if (!existingBreakTime || existingBreakTime <= now) {
+      postponedCount = 0;
+      breakTime = null;
+      scheduleNextBreak();
+    }
+
+    buildTray();
+    return;
   }
 
   if (settings.notificationType === NotificationType.Popup) {
@@ -339,6 +636,11 @@ export function checkIdle(): boolean {
   ) as IdleState;
 
   if (state === IdleState.Locked) {
+    if (!settings.idleResetEnabled) {
+      lockStart = null;
+      return false;
+    }
+
     if (!lockStart) {
       lockStart = new Date();
       return false;
@@ -371,11 +673,11 @@ function checkShouldHaveBreak(): boolean {
   return !havingBreak && settings.breaksEnabled && inWorkingHours && !idle;
 }
 
-function checkBreak(): void {
+async function checkBreak(): Promise<void> {
   const now = moment();
 
   if (breakTime !== null && now > breakTime) {
-    doBreak();
+    await doBreak();
   }
 }
 
@@ -388,8 +690,12 @@ export function wasStartedFromTray(): boolean {
   return startedFromTray;
 }
 
-function tick(): void {
+async function tick(): Promise<void> {
   try {
+    const settings: Settings = getSettings();
+    const idleResetSeconds = getSecondsFromSettings(
+      settings.idleResetLengthSeconds,
+    );
     const shouldHaveBreak = checkShouldHaveBreak();
 
     // This can happen if the computer is put to sleep. In this case, we want
@@ -399,9 +705,11 @@ function tick(): void {
       ? Math.abs(+new Date() - +lastTick) / 1000
       : 0;
     const breakSeconds = getBreakSeconds();
-    const lockSeconds = lockStart && Math.abs(+new Date() - +lockStart) / 1000;
+    const lockSeconds = lockStart
+      ? Math.abs(+new Date() - +lockStart) / 1000
+      : null;
 
-    if (lockStart && lockSeconds !== null && lockSeconds > breakSeconds) {
+    if (lockSeconds !== null && lockSeconds > breakSeconds) {
       // The computer has been locked for longer than the break period. In this
       // case, it's not particularly helpful to show an idle reset
       // notification, so unset idle start
@@ -413,7 +721,10 @@ function tick(): void {
       // notification, so just reset the break
       lockStart = null;
       breakTime = null;
-    } else if (secondsSinceLastTick > getIdleResetSeconds()) {
+    } else if (
+      settings.idleResetEnabled &&
+      secondsSinceLastTick > idleResetSeconds
+    ) {
       //  If idleStart exists, it means we were idle before the computer slept.
       //  If it doesn't exist, count the computer going unresponsive as the
       //  start of the idle period.
@@ -426,9 +737,9 @@ function tick(): void {
 
     if (!shouldHaveBreak && !havingBreak && breakTime) {
       if (checkIdle()) {
-        const idleResetSeconds = getIdleResetSeconds();
-        // Calculate when idle actually started by subtracting idle duration
-        idleStart = new Date(Date.now() - idleResetSeconds * 1000);
+        // Get actual system idle time and calculate when idle started
+        const actualIdleSeconds = powerMonitor.getSystemIdleTime();
+        idleStart = new Date(Date.now() - actualIdleSeconds * 1000);
       }
       breakTime = null;
       buildTray();
@@ -448,7 +759,14 @@ function tick(): void {
   }
 }
 
-let tickInterval: NodeJS.Timeout;
+let tickInterval: NodeJS.Timeout | undefined;
+
+export function cleanupBreaks(): void {
+  if (tickInterval !== undefined) {
+    clearInterval(tickInterval);
+    tickInterval = undefined;
+  }
+}
 
 export function initBreaks(): void {
   powerMonitor = require("electron").powerMonitor;
@@ -459,29 +777,350 @@ export function initBreaks(): void {
     scheduleNextBreak();
   }
 
-  if (tickInterval) {
-    clearInterval(tickInterval);
-  }
+  cleanupBreaks();
 
   tickInterval = setInterval(tick, 1000);
 }
 
-// Helper to expose the current break message to renderers (polled via settings get)
-export function getCurrentBreakMessage(): BreakMessageContent | null {
-  if (!currentBreakMessage) {
+export function beginBreakCountdown(): {
+  breakEndTime: number;
+  totalDurationMs: number;
+} | null {
+  if (!havingBreak) {
+    log.warn("Ignoring beginBreakCountdown because no break is active");
     return null;
   }
 
-  const cloned: BreakMessageContent = {
-    text: currentBreakMessage.text,
-    attachments: currentBreakMessage.attachments.map((attachment) => ({
-      ...attachment,
-    })),
-  };
+  const now = Date.now();
+  const totalMs =
+    currentBreakTotalDurationMs ??
+    Math.max(1, Math.round(getBreakLengthSeconds())) * 1000;
 
-  if (currentBreakMessage.durationSeconds !== undefined) {
-    cloned.durationSeconds = currentBreakMessage.durationSeconds;
+  currentBreakTotalDurationMs = totalMs;
+
+  if (breakCountdownPaused) {
+    const remaining = currentBreakRemainingMs ?? totalMs;
+    const breakEndTime = now + remaining;
+    currentBreakRemainingMs = remaining;
+    currentBreakEndTimestamp = breakEndTime;
+    breakCountdownPaused = false;
+    return {
+      breakEndTime,
+      totalDurationMs: currentBreakTotalDurationMs ?? totalMs,
+    };
   }
 
-  return cloned;
+  if (currentBreakEndTimestamp) {
+    const remaining = Math.max(0, currentBreakEndTimestamp - now);
+    currentBreakRemainingMs = remaining;
+    return {
+      breakEndTime: currentBreakEndTimestamp,
+      totalDurationMs: currentBreakTotalDurationMs ?? totalMs,
+    };
+  }
+
+  const breakEndTime = now + totalMs;
+  currentBreakRemainingMs = totalMs;
+  currentBreakEndTimestamp = breakEndTime;
+  breakCountdownPaused = false;
+
+  return {
+    breakEndTime,
+    totalDurationMs: currentBreakTotalDurationMs ?? totalMs,
+  };
+}
+
+export function pauseActiveBreak(): {
+  remainingMs: number;
+  totalDurationMs: number;
+} | null {
+  if (!havingBreak) {
+    log.warn("Ignoring pauseActiveBreak because no break is active");
+    return null;
+  }
+
+  if (breakCountdownPaused) {
+    log.info("Break countdown already paused");
+    return {
+      remainingMs: currentBreakRemainingMs ?? 0,
+      totalDurationMs: currentBreakTotalDurationMs ?? 0,
+    };
+  }
+
+  const now = Date.now();
+  const remainingMs = currentBreakEndTimestamp
+    ? Math.max(0, currentBreakEndTimestamp - now)
+    : (currentBreakRemainingMs ?? 0);
+
+  currentBreakRemainingMs = remainingMs;
+  currentBreakEndTimestamp = null;
+  breakCountdownPaused = true;
+
+  return {
+    remainingMs,
+    totalDurationMs: currentBreakTotalDurationMs ?? remainingMs,
+  };
+}
+
+export function resumeActiveBreak(): {
+  breakEndTime: number;
+  totalDurationMs: number;
+} | null {
+  if (!havingBreak) {
+    log.warn("Ignoring resumeActiveBreak because no break is active");
+    return null;
+  }
+
+  if (!breakCountdownPaused) {
+    log.info("Break countdown already running");
+    const endTimestamp =
+      currentBreakEndTimestamp ?? Date.now() + (currentBreakRemainingMs ?? 0);
+    currentBreakEndTimestamp = endTimestamp;
+    return {
+      breakEndTime: endTimestamp,
+      totalDurationMs:
+        currentBreakTotalDurationMs ?? currentBreakRemainingMs ?? 0,
+    };
+  }
+
+  const remainingMs =
+    currentBreakRemainingMs ?? currentBreakTotalDurationMs ?? 0;
+
+  if (remainingMs <= 0) {
+    log.warn("Cannot resume break countdown because remaining time is zero");
+    return null;
+  }
+
+  const breakEndTime = Date.now() + remainingMs;
+  currentBreakEndTimestamp = breakEndTime;
+  breakCountdownPaused = false;
+
+  return {
+    breakEndTime,
+    totalDurationMs: currentBreakTotalDurationMs ?? remainingMs,
+  };
+}
+
+export function adjustActiveBreakDuration(deltaMs: number):
+  | {
+      channel: IpcChannel.BreakStart;
+      payload: { breakEndTime: number; totalDurationMs: number };
+    }
+  | {
+      channel: IpcChannel.BreakPause;
+      payload: { remainingMs: number; totalDurationMs: number };
+    }
+  | null {
+  if (!havingBreak) {
+    log.warn("Ignoring adjustActiveBreakDuration because no break is active");
+    return null;
+  }
+
+  const isDeltaValid = typeof deltaMs === "number" && Number.isFinite(deltaMs);
+  const normalizedDelta = isDeltaValid ? Math.round(deltaMs) : 0;
+
+  if (normalizedDelta === 0) {
+    log.info(
+      "Skipping adjustActiveBreakDuration because delta resolved to zero",
+    );
+    return null;
+  }
+
+  const MIN_DURATION_MS = 1000;
+  const existingTotal = Math.max(
+    MIN_DURATION_MS,
+    currentBreakTotalDurationMs ?? MIN_DURATION_MS,
+  );
+  let adjustedTotal = existingTotal + normalizedDelta;
+  if (adjustedTotal < MIN_DURATION_MS) {
+    adjustedTotal = MIN_DURATION_MS;
+  }
+
+  if (breakCountdownPaused) {
+    const existingRemaining = Math.max(
+      0,
+      currentBreakRemainingMs ?? adjustedTotal,
+    );
+    let adjustedRemaining = existingRemaining + normalizedDelta;
+    if (adjustedRemaining < 0) {
+      adjustedRemaining = 0;
+    }
+    if (adjustedRemaining > adjustedTotal) {
+      adjustedRemaining = adjustedTotal;
+    }
+
+    currentBreakTotalDurationMs = adjustedTotal;
+    currentBreakRemainingMs = adjustedRemaining;
+    updateCurrentHistoryEntryDuration(adjustedTotal);
+
+    if (adjustedRemaining === 0) {
+      // Resume the countdown so the usual completion flow can run.
+      const now = Date.now();
+      currentBreakEndTimestamp = now;
+      breakCountdownPaused = false;
+      return {
+        channel: IpcChannel.BreakStart,
+        payload: {
+          breakEndTime: now,
+          totalDurationMs: adjustedTotal,
+        },
+      };
+    }
+
+    currentBreakEndTimestamp = null;
+    breakCountdownPaused = true;
+
+    return {
+      channel: IpcChannel.BreakPause,
+      payload: {
+        remainingMs: adjustedRemaining,
+        totalDurationMs: adjustedTotal,
+      },
+    };
+  }
+
+  const now = Date.now();
+  const derivedRemaining = currentBreakEndTimestamp
+    ? Math.max(0, currentBreakEndTimestamp - now)
+    : Math.max(0, currentBreakRemainingMs ?? adjustedTotal);
+
+  let adjustedRemaining = derivedRemaining + normalizedDelta;
+  if (adjustedRemaining < 0) {
+    adjustedRemaining = 0;
+  }
+  if (adjustedRemaining > adjustedTotal) {
+    adjustedRemaining = adjustedTotal;
+  }
+
+  currentBreakTotalDurationMs = adjustedTotal;
+  currentBreakRemainingMs = adjustedRemaining;
+  updateCurrentHistoryEntryDuration(adjustedTotal);
+
+  if (adjustedRemaining === 0) {
+    currentBreakEndTimestamp = now;
+    breakCountdownPaused = false;
+    return {
+      channel: IpcChannel.BreakStart,
+      payload: {
+        breakEndTime: now,
+        totalDurationMs: adjustedTotal,
+      },
+    };
+  }
+
+  const adjustedEnd = now + adjustedRemaining;
+  currentBreakEndTimestamp = adjustedEnd;
+  breakCountdownPaused = false;
+
+  return {
+    channel: IpcChannel.BreakStart,
+    payload: {
+      breakEndTime: adjustedEnd,
+      totalDurationMs: adjustedTotal,
+    },
+  };
+}
+
+export function isBreakCountdownPaused(): boolean {
+  return breakCountdownPaused;
+}
+
+export function getCurrentBreakRemainingMs(): number | null {
+  if (breakCountdownPaused) {
+    return currentBreakRemainingMs;
+  }
+
+  if (currentBreakEndTimestamp) {
+    return Math.max(0, currentBreakEndTimestamp - Date.now());
+  }
+
+  return null;
+}
+
+export function getCurrentBreakTotalDurationMs(): number | null {
+  return currentBreakTotalDurationMs;
+}
+
+// Helper to expose the current break message to renderers (polled via settings get)
+export async function skipCurrentBreakMessage(): Promise<BreakMessageSwitchResult> {
+  const settings: Settings = getSettings();
+
+  if (!havingBreak) {
+    log.warn("Ignoring skipCurrentBreakMessage because no break is active");
+    const fallbackDuration = resolveMessageDurationMs(
+      settings,
+      currentBreakMessage,
+    );
+    return createBreakMessageSwitchResult(fallbackDuration, settings);
+  }
+
+  const nextHistoryIndex = breakMessageHistoryIndex + 1;
+  const historyEntry = getHistoryEntry(nextHistoryIndex);
+
+  if (historyEntry) {
+    breakMessageHistoryIndex = nextHistoryIndex;
+    return applyBreakMessageEntry(historyEntry, settings);
+  }
+
+  const newMessage = await updateCurrentBreakMessageFromSettings(settings);
+  const targetDurationMs = resolveMessageDurationMs(settings, newMessage);
+  recordBreakMessageInHistory(newMessage, targetDurationMs);
+
+  const currentEntry = getCurrentHistoryEntry();
+  if (currentEntry) {
+    return applyBreakMessageEntry(currentEntry, settings);
+  }
+
+  return createBreakMessageSwitchResult(targetDurationMs, settings);
+}
+
+export function goToPreviousBreakMessage(): BreakMessageSwitchResult {
+  const settings: Settings = getSettings();
+
+  if (!havingBreak) {
+    log.warn("Ignoring goToPreviousBreakMessage because no break is active");
+    const fallbackDuration = resolveMessageDurationMs(
+      settings,
+      currentBreakMessage,
+    );
+    return createBreakMessageSwitchResult(fallbackDuration, settings);
+  }
+
+  const previousHistoryIndex = breakMessageHistoryIndex - 1;
+  if (previousHistoryIndex < 0) {
+    log.warn(
+      "Ignoring goToPreviousBreakMessage because no previous message is available",
+    );
+    const fallbackDuration = resolveMessageDurationMs(
+      settings,
+      currentBreakMessage,
+    );
+    return createBreakMessageSwitchResult(fallbackDuration, settings);
+  }
+
+  const previousEntry = getHistoryEntry(previousHistoryIndex);
+  if (!previousEntry) {
+    log.warn("Previous break message history entry missing");
+    const fallbackDuration = resolveMessageDurationMs(
+      settings,
+      currentBreakMessage,
+    );
+    return createBreakMessageSwitchResult(fallbackDuration, settings);
+  }
+
+  breakMessageHistoryIndex = previousHistoryIndex;
+  return applyBreakMessageEntry(previousEntry, settings);
+}
+
+export function getCurrentBreakMessage(): BreakMessageContent | null {
+  return cloneBreakMessageContent(currentBreakMessage);
+}
+
+export function getCurrentBreakMessageSnapshot(): BreakMessageSwitchResult {
+  const settings: Settings = getSettings();
+  const durationMs =
+    currentBreakTotalDurationMs ??
+    resolveMessageDurationMs(settings, currentBreakMessage);
+
+  return createBreakMessageSwitchResult(durationMs, settings);
 }

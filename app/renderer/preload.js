@@ -9,8 +9,10 @@
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 process.once("loaded", () => {
-  contextBridge.exposeInMainWorld("processEnv", { ...process.env });
-  contextBridge.exposeInMainWorld("processPlatform", process.platform);
+  contextBridge.exposeInMainWorld("process", {
+    env: { ...process.env },
+    platform: process.platform,
+  });
   contextBridge.exposeInMainWorld("webFrame", {
     setZoomFactor: (factor) => {
       webFrame.setZoomFactor(factor);
@@ -22,6 +24,21 @@ process.once("loaded", () => {
   contextBridge.exposeInMainWorld("ipcRenderer", {
     invokeBreakPostpone: (action) => {
       return ipcRenderer.invoke("BREAK_POSTPONE", action);
+    },
+    invokeBreakPause: () => {
+      return ipcRenderer.invoke("BREAK_PAUSE");
+    },
+    invokeBreakResume: () => {
+      return ipcRenderer.invoke("BREAK_RESUME");
+    },
+    invokeBreakMessageNext: () => {
+      return ipcRenderer.invoke("BREAK_MESSAGE_NEXT");
+    },
+    invokeBreakMessagePrevious: () => {
+      return ipcRenderer.invoke("BREAK_MESSAGE_PREVIOUS");
+    },
+    invokeBreakAdjustDuration: (deltaMs) => {
+      return ipcRenderer.invoke("BREAK_ADJUST_DURATION", deltaMs);
     },
     invokeGetAllowPostpone: () => {
       return ipcRenderer.invoke("ALLOW_POSTPONE_GET");
@@ -75,24 +92,46 @@ process.once("loaded", () => {
       return ipcRenderer.invoke("BREAK_END");
     },
     onPlayStartSound: (cb) => {
-      ipcRenderer.on("SOUND_START_PLAY", (_event, type, volume = 1) => {
+      const listener = (_event, type, volume = 1) => {
         cb(type, volume);
-      });
+      };
+      ipcRenderer.on("SOUND_START_PLAY", listener);
+      return () => ipcRenderer.removeListener("SOUND_START_PLAY", listener);
     },
     onPlayEndSound: (cb) => {
-      ipcRenderer.on("SOUND_END_PLAY", (_event, type, volume = 1) => {
+      const listener = (_event, type, volume = 1) => {
         cb(type, volume);
-      });
+      };
+      ipcRenderer.on("SOUND_END_PLAY", listener);
+      return () => ipcRenderer.removeListener("SOUND_END_PLAY", listener);
     },
     onBreakStart: (cb) => {
-      ipcRenderer.on("BREAK_START", (_event, breakEndTime) => {
-        cb(breakEndTime);
-      });
+      const listener = (_event, payload) => {
+        cb(payload);
+      };
+      ipcRenderer.on("BREAK_START", listener);
+      return () => ipcRenderer.removeListener("BREAK_START", listener);
+    },
+    onBreakPause: (cb) => {
+      const listener = (_event, payload) => {
+        cb(payload);
+      };
+      ipcRenderer.on("BREAK_PAUSE", listener);
+      return () => ipcRenderer.removeListener("BREAK_PAUSE", listener);
     },
     onBreakEnd: (cb) => {
-      ipcRenderer.on("BREAK_END", () => {
+      const listener = () => {
         cb();
-      });
+      };
+      ipcRenderer.on("BREAK_END", listener);
+      return () => ipcRenderer.removeListener("BREAK_END", listener);
+    },
+    onBreakMessageUpdate: (cb) => {
+      const listener = (_event, payload) => {
+        cb(payload);
+      };
+      ipcRenderer.on("BREAK_MESSAGE_UPDATE", listener);
+      return () => ipcRenderer.removeListener("BREAK_MESSAGE_UPDATE", listener);
     },
   });
 });

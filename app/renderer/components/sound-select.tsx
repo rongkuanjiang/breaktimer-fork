@@ -9,6 +9,8 @@ import {
 import { Play } from "lucide-react";
 import { SoundType } from "../../types/settings";
 
+import { useIpc } from "../contexts/ipc-context";
+
 interface SoundSelectProps {
   value: SoundType;
   onChange: (value: SoundType) => void;
@@ -22,9 +24,11 @@ export function SoundSelect({
   disabled,
   volume = 1,
 }: SoundSelectProps) {
+  const ipc = useIpc();
+
   const playSound = (soundType: SoundType) => {
     if (soundType === SoundType.None) return;
-    ipcRenderer.invokeStartSound(soundType, volume);
+    ipc.invokeStartSound(soundType, volume);
   };
 
   return (

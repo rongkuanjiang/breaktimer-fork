@@ -1,6 +1,23 @@
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { useEffect, useMemo, useState } from "react";
-import { MessageColorEffect, NotificationType, Settings, SoundType } from "../../types/settings";
+import { Spinner } from "@/components/ui/spinner";
+import equal from "fast-deep-equal";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  type CSSProperties,
+} from "react";
+import {
+  MessageColorEffect,
+  NotificationType,
+  Settings,
+  SoundType,
+  defaultSettings,
+} from "../../types/settings";
+import { SettingsSchema } from "../../types/settings-schema";
+import { useIpc } from "../contexts/ipc-context";
 import { toast } from "../toaster";
 import AdvancedCard from "./settings/advanced-card";
 import AudioCard from "./settings/audio-card";
@@ -17,62 +34,6 @@ import ThemeCard from "./settings/theme-card";
 import WorkingHoursSettings from "./settings/working-hours";
 import WelcomeModal from "./welcome-modal";
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) {
-    return true;
-  }
-
-  if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
-    return true;
-  }
-
-  if (a === null || b === null) {
-    return false;
-  }
-
-  if (typeof a !== typeof b) {
-    return false;
-  }
-
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) {
-      return false;
-    }
-
-    for (let index = 0; index < a.length; index += 1) {
-      if (!deepEqual(a[index], b[index])) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return false;
-  }
-
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime();
-  }
-
-  if (typeof a === "object" && typeof b === "object") {
-    const aRecord = a as Record<string, unknown>;
-    const bRecord = b as Record<string, unknown>;
-    const keys = new Set([...Object.keys(aRecord), ...Object.keys(bRecord)]);
-
-    for (const key of keys) {
-      if (!deepEqual(aRecord[key], bRecord[key])) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  return false;
-}
-
 function areSettingsEqual(a: Settings | null, b: Settings | null): boolean {
   if (a === b) {
     return true;
@@ -82,31 +43,61 @@ function areSettingsEqual(a: Settings | null, b: Settings | null): boolean {
     return false;
   }
 
-  return deepEqual(a, b);
+  return equal(a, b);
 }
 
 export default function SettingsEl() {
+  const ipc = useIpc();
   const [settingsDraft, setSettingsDraft] = useState<Settings | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
+  const isMounted = useRef(false);
 
   useEffect(() => {
+    isMounted.current = true;
     (async () => {
-      const settings = (await ipcRenderer.invokeGetSettings()) as Settings;
-      setSettingsDraft(settings);
-      setSettings(settings);
+      try {
+        const rawSettings = await ipc.invokeGetSettings();
+        const result = SettingsSchema.safeParse(rawSettings);
 
-      // Check if this is the first time running the app
-      const appInitialized = await ipcRenderer.invokeGetAppInitialized();
-      setShowWelcomeModal(!appInitialized);
+        if (result.success) {
+          if (isMounted.current) {
+            setSettingsDraft(result.data);
+            setSettings(result.data);
+          }
+        } else {
+          console.error("Settings validation failed:", result.error);
+          toast("Failed to load settings. Using defaults.");
+          if (isMounted.current) {
+            setSettingsDraft(defaultSettings);
+            setSettings(defaultSettings);
+          }
+        }
+
+        // Check if this is the first time running the app
+        const appInitialized = await ipc.invokeGetAppInitialized();
+        if (isMounted.current) {
+          setShowWelcomeModal(!appInitialized);
+        }
+      } catch (error) {
+        console.error("Failed to load settings:", error);
+        toast("Failed to load settings.");
+        if (isMounted.current) {
+          setSettingsDraft(defaultSettings);
+          setSettings(defaultSettings);
+        }
+      }
     })();
+
+    return () => {
+      isMounted.current = false;
+    };
   }, []);
 
   useEffect(() => {
     const MIN_ZOOM = 0.8;
     const MAX_ZOOM = 1.5;
-    const ZOOM_STEP = 0.1;
     const increaseKeys = new Set(["=", "+", "Add"]);
     const decreaseKeys = new Set(["-", "_", "Subtract"]);
 
@@ -117,17 +108,29 @@ export default function SettingsEl() {
 
       if (increaseKeys.has(event.key)) {
         event.preventDefault();
-        setZoomLevel((current) =>
-          Math.min(MAX_ZOOM, parseFloat((current + ZOOM_STEP).toFixed(2))),
-        );
+        setZoomLevel((current) => {
+          // Use integer arithmetic to avoid floating point errors
+          const currentSteps = Math.round(current * 10);
+          const newSteps = Math.min(
+            Math.round(MAX_ZOOM * 10),
+            currentSteps + 1
+          );
+          return newSteps / 10;
+        });
         return;
       }
 
       if (decreaseKeys.has(event.key)) {
         event.preventDefault();
-        setZoomLevel((current) =>
-          Math.max(MIN_ZOOM, parseFloat((current - ZOOM_STEP).toFixed(2))),
-        );
+        setZoomLevel((current) => {
+          // Use integer arithmetic to avoid floating point errors
+          const currentSteps = Math.round(current * 10);
+          const newSteps = Math.max(
+            Math.round(MIN_ZOOM * 10),
+            currentSteps - 1
+          );
+          return newSteps / 10;
+        });
         return;
       }
 
@@ -154,20 +157,12 @@ export default function SettingsEl() {
       }
 
       const previousZoom = body.style.zoom;
-      const previousBackground = body.style.backgroundColor;
-      body.style.backgroundColor = "var(--background)";
 
       return () => {
         if (previousZoom) {
           body.style.zoom = previousZoom;
         } else {
           body.style.removeProperty("zoom");
-        }
-
-        if (previousBackground) {
-          body.style.backgroundColor = previousBackground;
-        } else {
-          body.style.removeProperty("background-color");
         }
       };
     }
@@ -210,104 +205,174 @@ export default function SettingsEl() {
   }, [settings, settingsDraft]);
 
   if (settings === null || settingsDraft === null) {
-    return null;
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-background">
+        <Spinner size={48} />
+      </div>
+    );
   }
 
-  const handleNotificationTypeChange = (value: string): void => {
+  const handleNotificationTypeChange = useCallback((value: string): void => {
     const notificationType = value as NotificationType;
-    setSettingsDraft({ ...settingsDraft, notificationType });
-  };
+    setSettingsDraft((current) =>
+      current ? { ...current, notificationType } : null
+    );
+  }, []);
 
-  const handleDateChange = (fieldName: string, newVal: Date): void => {
-    const seconds =
-      newVal.getHours() * 3600 + newVal.getMinutes() * 60 + newVal.getSeconds();
+  const handleDateChange = useCallback(
+    (fieldName: string, newVal: Date): void => {
+      const seconds =
+        newVal.getHours() * 3600 +
+        newVal.getMinutes() * 60 +
+        newVal.getSeconds();
 
-    let secondsField: keyof Settings;
-    if (fieldName === "breakFrequency") {
-      secondsField = "breakFrequencySeconds";
-    } else if (fieldName === "breakLength") {
-      secondsField = "breakLengthSeconds";
-    } else if (fieldName === "postponeLength") {
-      secondsField = "postponeLengthSeconds";
-    } else if (fieldName === "idleResetLength") {
-      secondsField = "idleResetLengthSeconds";
-    } else {
-      return;
-    }
+      let secondsField: keyof Settings;
+      if (fieldName === "breakFrequency") {
+        secondsField = "breakFrequencySeconds";
+      } else if (fieldName === "breakLength") {
+        secondsField = "breakLengthSeconds";
+      } else if (fieldName === "postponeLength") {
+        secondsField = "postponeLengthSeconds";
+      } else if (fieldName === "idleResetLength") {
+        secondsField = "idleResetLengthSeconds";
+      } else {
+        return;
+      }
 
-    setSettingsDraft({
-      ...settingsDraft,
-      [secondsField]: seconds,
-    });
-  };
+      setSettingsDraft((current) =>
+        current
+          ? {
+              ...current,
+              [secondsField]: seconds,
+            }
+          : null
+      );
+    },
+    []
+  );
 
-  const handlePostponeLimitChange = (value: string): void => {
+  const handlePostponeLimitChange = useCallback((value: string): void => {
     const postponeLimit = Number(value);
-    setSettingsDraft({ ...settingsDraft, postponeLimit });
-  };
+    setSettingsDraft((current) =>
+      current ? { ...current, postponeLimit } : null
+    );
+  }, []);
 
-  const handleTextChange = (
-    field: string,
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ): void => {
-    // Allow passing arrays via synthetic events (for breakMessages)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const value = (e.target as any).value;
-    setSettingsDraft({
-      ...settingsDraft,
-      [field]: value,
-    });
-  };
+  const handleTextChange = useCallback(
+    (
+      field: string,
+      e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    ): void => {
+      const value = e.target.value;
+      setSettingsDraft((current) =>
+        current
+          ? {
+              ...current,
+              [field as keyof Settings]: value,
+            }
+          : null
+      );
+    },
+    []
+  );
 
-  const handleSwitchChange = (field: string, checked: boolean): void => {
-    setSettingsDraft({
-      ...settingsDraft,
-      [field]: checked,
-    });
-  };
+  const handleValueChange = useCallback(
+    <K extends keyof Settings>(field: K, value: Settings[K]): void => {
+      setSettingsDraft((current) =>
+        current
+          ? {
+              ...current,
+              [field]: value,
+            }
+          : null
+      );
+    },
+    []
+  );
 
-  const handleResetColors = (): void => {
-    setSettingsDraft({
-      ...settingsDraft,
-      textColor: "#ffffff",
-      backgroundColor: "#16a085",
-      backgroundImage: null,
-      backdropOpacity: 0.7,
-      titleTextColor: "#ffffff",
-      messageTextColor: "#ffffff",
-      messageColorEffect: MessageColorEffect.Static,
-    });
-  };
+  const handleSwitchChange = useCallback(
+    (field: string, checked: boolean): void => {
+      setSettingsDraft((current) =>
+        current
+          ? {
+              ...current,
+              [field]: checked,
+            }
+          : null
+      );
+    },
+    []
+  );
 
-  const handleSliderChange = (
-    field: keyof Settings,
-    values: number[],
-  ): void => {
-    setSettingsDraft({
-      ...settingsDraft,
-      [field]: values[0],
-    });
-  };
+  const handleResetColors = useCallback((): void => {
+    setSettingsDraft((current) =>
+      current
+        ? {
+            ...current,
+            textColor: "#ffffff",
+            backgroundColor: "#16a085",
+            backgroundImage: null,
+            backdropOpacity: 0.7,
+            titleTextColor: "#ffffff",
+            messageTextColor: "#ffffff",
+            messageColorEffect: MessageColorEffect.Static,
+            applyMessageColorEffectToTitle: false,
+            applyMessageColorEffectToButtons: false,
+          }
+        : null
+    );
+  }, []);
 
-  const handleSoundTypeChange = (soundType: SoundType): void => {
-    setSettingsDraft({
-      ...settingsDraft,
-      soundType,
-    });
-  };
+  const handleSliderChange = useCallback(
+    (field: keyof Settings, values: number[]): void => {
+      setSettingsDraft((current) =>
+        current
+          ? {
+              ...current,
+              [field]: values[0],
+            }
+          : null
+      );
+    },
+    []
+  );
 
-  const handleSave = async () => {
+  const handleSoundTypeChange = useCallback((soundType: SoundType): void => {
+    setSettingsDraft((current) =>
+      current
+        ? {
+            ...current,
+            soundType,
+          }
+        : null
+    );
+  }, []);
+
+  const handleSave = useCallback(async () => {
     if (!settingsDraft) {
       return;
     }
 
     try {
-      await ipcRenderer.invokeSetSettings(settingsDraft);
-      const updatedSettings = (await ipcRenderer.invokeGetSettings()) as Settings;
+      await ipc.invokeSetSettings(settingsDraft);
+
+      if (!isMounted.current) {
+        return;
+      }
+
+      const updatedSettings = (await ipc.invokeGetSettings()) as Settings;
+
+      if (!isMounted.current) {
+        return;
+      }
+
       toast("Settings saved");
       setSettingsDraft(updatedSettings);
       setSettings(updatedSettings);
     } catch (error) {
+      if (!isMounted.current) {
+        return;
+      }
       // Log to devtools for debugging while keeping UI feedback user-friendly
       console.error("Failed to save settings", error);
       const baseMessage =
@@ -320,6 +385,21 @@ export default function SettingsEl() {
           : null;
       toast(details ? `${baseMessage} (${details})` : baseMessage);
     }
+  }, [ipc, settingsDraft]);
+
+  const handleWorkingHoursEnabledChange = useCallback(
+    (checked: boolean) => {
+      handleSwitchChange("workingHoursEnabled", checked);
+    },
+    [handleSwitchChange]
+  );
+
+  const handleWelcomeModalClose = useCallback(() => {
+    setShowWelcomeModal(false);
+  }, []);
+
+  const scrollAreaStyle: CSSProperties & Record<string, string | number> = {
+    "--settings-scroll-padding-top": "1.5rem",
   };
 
   return (
@@ -329,7 +409,10 @@ export default function SettingsEl() {
         className="w-full h-full flex flex-col"
       >
         <SettingsHeader handleSave={handleSave} showSave={dirty} />
-        <div className="flex-1 overflow-auto p-6 min-h-0">
+        <div
+          className="flex-1 overflow-auto p-6 min-h-0"
+          style={scrollAreaStyle}
+        >
           <TabsContent value="break-behavior" className="m-0 space-y-8">
             <BreaksCard
               settingsDraft={settingsDraft}
@@ -366,8 +449,7 @@ export default function SettingsEl() {
               helperText="Only show breaks during your configured work schedule."
               toggle={{
                 checked: settingsDraft.workingHoursEnabled,
-                onCheckedChange: (checked) =>
-                  handleSwitchChange("workingHoursEnabled", checked),
+                onCheckedChange: handleWorkingHoursEnabledChange,
                 disabled: !settingsDraft.breaksEnabled,
               }}
             >
@@ -382,6 +464,7 @@ export default function SettingsEl() {
             <MessagesCard
               settingsDraft={settingsDraft}
               onTextChange={handleTextChange}
+              onMessagesChange={handleValueChange}
             />
           </TabsContent>
 
@@ -389,6 +472,8 @@ export default function SettingsEl() {
             <ThemeCard
               settingsDraft={settingsDraft}
               onTextChange={handleTextChange}
+              onValueChange={handleValueChange}
+              onSwitchChange={handleSwitchChange}
               onResetColors={handleResetColors}
             />
 
@@ -405,7 +490,7 @@ export default function SettingsEl() {
             />
           </TabsContent>
 
-          {processEnv.SNAP === undefined && (
+          {window.process?.env?.SNAP === undefined && (
             <TabsContent value="system" className="m-0 space-y-6">
               <StartupCard
                 settingsDraft={settingsDraft}
@@ -415,10 +500,7 @@ export default function SettingsEl() {
           )}
         </div>
       </Tabs>
-      <WelcomeModal
-        open={showWelcomeModal}
-        onClose={() => setShowWelcomeModal(false)}
-      />
+      <WelcomeModal open={showWelcomeModal} onClose={handleWelcomeModalClose} />
     </div>
   );
 }

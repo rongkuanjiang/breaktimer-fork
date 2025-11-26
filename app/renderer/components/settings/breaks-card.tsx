@@ -1,6 +1,12 @@
 import type { ChangeEvent } from "react";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import SettingsCard from "./settings-card";
 import TimeInput from "./time-input";
 import { Input } from "@/components/ui/input";
@@ -11,8 +17,8 @@ interface BreaksCardProps {
   onNotificationTypeChange: (value: string) => void;
   onDateChange: (fieldName: string, newVal: Date) => void;
   onTextChange: (
-    field: string,
-    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    field: keyof Settings,
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => void;
   onSwitchChange: (field: string, checked: boolean) => void;
 }
@@ -54,7 +60,9 @@ export default function BreaksCard({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NotificationType.Popup}>Popup break</SelectItem>
+                <SelectItem value={NotificationType.Popup}>
+                  Popup break
+                </SelectItem>
                 <SelectItem value={NotificationType.Notification}>
                   Simple notification
                 </SelectItem>
@@ -67,7 +75,9 @@ export default function BreaksCard({
             <TimeInput
               precision="seconds"
               value={settingsDraft.breakFrequencySeconds}
-              onChange={(seconds) => onDateChange("breakFrequency", secondsToDate(seconds))}
+              onChange={(seconds) =>
+                onDateChange("breakFrequency", secondsToDate(seconds))
+              }
               disabled={!settingsDraft.breaksEnabled}
             />
           </div>
@@ -77,7 +87,9 @@ export default function BreaksCard({
             <TimeInput
               precision="seconds"
               value={settingsDraft.breakLengthSeconds}
-              onChange={(seconds) => onDateChange("breakLength", secondsToDate(seconds))}
+              onChange={(seconds) =>
+                onDateChange("breakLength", secondsToDate(seconds))
+              }
               disabled={
                 !settingsDraft.breaksEnabled ||
                 settingsDraft.notificationType !== NotificationType.Popup
@@ -92,7 +104,7 @@ export default function BreaksCard({
             id="break-title"
             className="text-sm"
             value={settingsDraft.breakTitle}
-            onChange={onTextChange.bind(null, "breakTitle")}
+            onChange={(e) => onTextChange("breakTitle", e)}
             disabled={!settingsDraft.breaksEnabled}
           />
         </div>

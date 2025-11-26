@@ -3,6 +3,7 @@ const typescript = require("@typescript-eslint/eslint-plugin");
 const typescriptParser = require("@typescript-eslint/parser");
 const react = require("eslint-plugin-react");
 const reactHooks = require("eslint-plugin-react-hooks");
+const globals = require("globals");
 
 module.exports = [
   js.configs.recommended,
@@ -17,24 +18,8 @@ module.exports = [
         },
       },
       globals: {
-        // Browser globals
-        window: "readonly",
-        document: "readonly",
-        console: "readonly",
-        location: "readonly",
-        // Node.js globals
-        process: "readonly",
-        Buffer: "readonly",
-        __dirname: "readonly",
-        __filename: "readonly",
-        module: "readonly",
-        require: "readonly",
-        exports: "readonly",
-        global: "readonly",
-        setTimeout: "readonly",
-        setInterval: "readonly",
-        clearTimeout: "readonly",
-        clearInterval: "readonly",
+        ...globals.browser,
+        ...globals.node,
         // Node.js types
         NodeJS: "readonly",
         // Electron globals

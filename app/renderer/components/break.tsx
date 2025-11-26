@@ -1,28 +1,71 @@
+/* global BreakTimerStartPayload, BreakTimerPausePayload */
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { MessageColorEffect, SoundType, normalizeBreakMessage } from "../../types/settings";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import {
+  MessageColorEffect,
+  SoundType,
+  normalizeBreakMessage,
+} from "../../types/settings";
 import type { BreakMessageContent, Settings } from "../../types/settings";
+import type {
+  BreakMessageSwitchResult,
+  BreakMessageUpdatePayload,
+} from "../../types/breaks";
 import { BreakNotification } from "./break/break-notification";
 import { BreakProgress } from "./break/break-progress";
 import { createDarkerRgba, createRgba } from "./break/utils";
+import { useIpc } from "../contexts/ipc-context";
 
 export default function Break() {
+  const ipc = useIpc();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [currentBreakMessage, setCurrentBreakMessage] =
     useState<BreakMessageContent | null>(null);
   const [countingDown, setCountingDown] = useState(true);
   const [allowPostpone, setAllowPostpone] = useState<boolean | null>(null);
   const [timeSinceLastBreak, setTimeSinceLastBreak] = useState<number | null>(
-    null,
+    null
   );
   const [ready, setReady] = useState(false);
   const [closing, setClosing] = useState(false);
   const [breakWindowReady, setBreakWindowReady] = useState(false);
   const [sharedBreakEndTime, setSharedBreakEndTime] = useState<number | null>(
-    null,
+    null
   );
+  const [breakPaused, setBreakPaused] = useState(false);
+  const breakPausedRef = useRef(false);
+  const [pausedRemainingMs, setPausedRemainingMs] = useState<number | null>(
+    null
+  );
+  const [breakTotalDurationMs, setBreakTotalDurationMs] = useState<
+    number | null
+  >(null);
+  const [switchingMessage, setSwitchingMessage] = useState(false);
+  const [hasPreviousMessage, setHasPreviousMessage] = useState(false);
+  const [hasNextMessage, setHasNextMessage] = useState(true);
   const hasNotifiedWindowReadyRef = useRef(false);
   const hasSignaledBreakStartRef = useRef(false);
+  const settingsRef = useRef<Settings | null>(null);
+
+  const isMounted = useRef(false);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    breakPausedRef.current = breakPaused;
+  }, [breakPaused]);
 
   const isPrimaryWindow = useMemo(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -30,25 +73,108 @@ export default function Break() {
     return windowId === "0" || windowId === null;
   }, []);
 
+  const applySwitchResult = useCallback(
+    (
+      payload:
+        | BreakMessageSwitchResult
+        | BreakMessageUpdatePayload
+        | null
+        | undefined,
+      options?: { updateTimer?: boolean }
+    ) => {
+      if (!isMounted.current) {
+        return;
+      }
+      const fallbackSource = settingsRef.current?.breakMessage ?? "";
+      const normalized = payload?.message
+        ? normalizeBreakMessage(payload.message)
+        : normalizeBreakMessage(fallbackSource);
+      setCurrentBreakMessage(normalized);
+
+      const durationFromPayload =
+        payload && "durationMs" in payload
+          ? Number((payload as BreakMessageSwitchResult).durationMs)
+          : NaN;
+
+      let resolvedDurationMs: number | null = null;
+
+      if (Number.isFinite(durationFromPayload) && durationFromPayload > 0) {
+        resolvedDurationMs = Math.max(1, Math.round(durationFromPayload));
+      } else if (
+        typeof normalized?.durationSeconds === "number" &&
+        Number.isFinite(normalized.durationSeconds) &&
+        normalized.durationSeconds > 0
+      ) {
+        resolvedDurationMs =
+          Math.max(1, Math.round(normalized.durationSeconds)) * 1000;
+      } else {
+        const fallbackLengthSecondsRaw =
+          settingsRef.current?.breakLengthSeconds;
+        if (
+          typeof fallbackLengthSecondsRaw === "number" &&
+          Number.isFinite(fallbackLengthSecondsRaw) &&
+          fallbackLengthSecondsRaw > 0
+        ) {
+          resolvedDurationMs =
+            Math.max(1, Math.round(fallbackLengthSecondsRaw)) * 1000;
+        }
+      }
+
+      if (resolvedDurationMs !== null) {
+        setBreakTotalDurationMs(resolvedDurationMs);
+        if (options?.updateTimer) {
+          if (breakPausedRef.current) {
+            setPausedRemainingMs(resolvedDurationMs);
+            setSharedBreakEndTime(null);
+          } else {
+            setSharedBreakEndTime(Date.now() + resolvedDurationMs);
+            setPausedRemainingMs(null);
+          }
+        }
+      }
+
+      if (payload && typeof payload.hasPrevious === "boolean") {
+        setHasPreviousMessage(payload.hasPrevious);
+      } else if (!payload) {
+        setHasPreviousMessage(false);
+      }
+
+      const fallbackHasNext =
+        (settingsRef.current?.breakMessages?.length ?? 0) > 1;
+      if (payload && typeof payload.hasNext === "boolean") {
+        setHasNextMessage(payload.hasNext);
+      } else {
+        setHasNextMessage(fallbackHasNext);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     const init = async () => {
       const [allowPostpone, settings, timeSince, startedFromTray] =
         await Promise.all([
-          ipcRenderer.invokeGetAllowPostpone(),
-          ipcRenderer.invokeGetSettings() as Promise<Settings>,
-          ipcRenderer.invokeGetTimeSinceLastBreak(),
-          ipcRenderer.invokeWasStartedFromTray(),
+          ipc.invokeGetAllowPostpone(),
+          ipc.invokeGetSettings(),
+          ipc.invokeGetTimeSinceLastBreak(),
+          ipc.invokeWasStartedFromTray(),
         ]);
+
+      if (!isMounted.current) {
+        return;
+      }
 
       setAllowPostpone(allowPostpone);
       setSettings(settings);
-      const currentMessage =
-        (await ipcRenderer.invokeGetCurrentBreakMessage()) as
-          | BreakMessageContent
-          | null;
-      setCurrentBreakMessage(
-        currentMessage ? normalizeBreakMessage(currentMessage) : null,
-      );
+      settingsRef.current = settings;
+      const currentMessageResult =
+        (await ipc.invokeGetCurrentBreakMessage()) as BreakMessageSwitchResult | null;
+
+      if (!isMounted.current) {
+        return;
+      }
+
+      applySwitchResult(currentMessageResult, { updateTimer: false });
       setTimeSinceLastBreak(timeSince);
 
       // Skip the countdown if immediately start breaks is enabled or started from tray
@@ -59,33 +185,108 @@ export default function Break() {
       setReady(true);
     };
 
-    // Listen for break start broadcasts from other windows
-    const handleBreakStart = (breakEndTime: number | string) => {
-      const parsedBreakEndTime =
-        typeof breakEndTime === "number"
-          ? breakEndTime
-          : typeof breakEndTime === "string"
-            ? Number.parseInt(breakEndTime, 10)
-            : Number.NaN;
+    // Listen for break start/resume broadcasts from other windows
+    const handleBreakStart = (
+      payload: BreakTimerStartPayload | number | string
+    ) => {
+      if (!isMounted.current) return;
+      let breakEndTimeValue: number | null = null;
+      let totalDurationValue: number | null = null;
 
-      setSharedBreakEndTime(
-        Number.isFinite(parsedBreakEndTime) ? parsedBreakEndTime : null,
-      );
+      if (payload && typeof payload === "object" && "breakEndTime" in payload) {
+        const endCandidate = Number(
+          (payload as BreakTimerStartPayload).breakEndTime
+        );
+        breakEndTimeValue = Number.isFinite(endCandidate) ? endCandidate : null;
+        const durationCandidate = Number(
+          (payload as BreakTimerStartPayload).totalDurationMs
+        );
+        totalDurationValue = Number.isFinite(durationCandidate)
+          ? Math.max(1, Math.round(durationCandidate))
+          : null;
+      } else if (typeof payload === "number") {
+        breakEndTimeValue = payload;
+      } else if (typeof payload === "string") {
+        const parsed = Number.parseInt(payload, 10);
+        breakEndTimeValue = Number.isFinite(parsed) ? parsed : null;
+      }
+
+      if (
+        typeof totalDurationValue === "number" &&
+        Number.isFinite(totalDurationValue) &&
+        totalDurationValue > 0
+      ) {
+        setBreakTotalDurationMs(totalDurationValue);
+      }
+
+      setSharedBreakEndTime(breakEndTimeValue);
+      setBreakPaused(false);
+      setPausedRemainingMs(null);
       setCountingDown(false);
+    };
+
+    const handleBreakPause = (payload: BreakTimerPausePayload) => {
+      if (!isMounted.current) return;
+      const remainingCandidate = Number(payload?.remainingMs);
+      const durationCandidate = Number(payload?.totalDurationMs);
+
+      setBreakPaused(true);
+      setSharedBreakEndTime(null);
+      setPausedRemainingMs(
+        Number.isFinite(remainingCandidate) && remainingCandidate >= 0
+          ? remainingCandidate
+          : null
+      );
+
+      if (Number.isFinite(durationCandidate) && durationCandidate !== 0) {
+        setBreakTotalDurationMs(Math.max(1, Math.round(durationCandidate)));
+      }
+    };
+
+    const handleBreakMessageUpdate = (payload: BreakMessageUpdatePayload) => {
+      if (!isMounted.current) return;
+      applySwitchResult(payload, { updateTimer: false });
+      setSwitchingMessage(false);
     };
 
     // Listen for break end broadcasts from other windows
     const handleBreakEnd = () => {
+      if (!isMounted.current) return;
       setClosing(true);
     };
 
-    ipcRenderer.onBreakStart(handleBreakStart);
-    ipcRenderer.onBreakEnd(handleBreakEnd);
+    const removeBreakStart = ipc.onBreakStart(handleBreakStart);
+    const removeBreakPause = ipc.onBreakPause(handleBreakPause);
+    const removeBreakEnd = ipc.onBreakEnd(handleBreakEnd);
+    const removeBreakMessageUpdate = ipc.onBreakMessageUpdate(
+      handleBreakMessageUpdate
+    );
 
-    // Delay or the window displays incorrectly.
-    // FIXME: work out why and how to avoid this.
-    setTimeout(init, 1000);
-  }, []);
+    // Wait for ipcRenderer to be available and window to be ready
+    // This ensures proper initialization without race conditions
+    const startInit = () => {
+      // Check if ipc is available
+      if (typeof ipc === "undefined") {
+        // Retry after a short delay if ipc isn't ready
+        window.requestAnimationFrame(() => setTimeout(startInit, 50));
+        return;
+      }
+
+      // Use requestAnimationFrame to ensure the DOM is fully ready
+      window.requestAnimationFrame(() => {
+        void init();
+      });
+    };
+
+    startInit();
+
+    return () => {
+      removeBreakStart();
+      removeBreakPause();
+      removeBreakEnd();
+      removeBreakMessageUpdate();
+    };
+  }, [applySwitchResult]);
 
   useEffect(() => {
     if (!ready || hasNotifiedWindowReadyRef.current) {
@@ -96,14 +297,21 @@ export default function Break() {
 
     const notifyMainProcess = async () => {
       try {
-        await ipcRenderer.invokeBreakWindowReady();
+        await ipc.invokeBreakWindowReady();
       } catch (error) {
-        console.warn("Failed to notify main process that break window is ready", error);
+        console.warn(
+          "Failed to notify main process that break window is ready",
+          error
+        );
       }
     };
 
     void notifyMainProcess();
   }, [ready]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   const signalBreakStart = useCallback(async () => {
     if (hasSignaledBreakStartRef.current) {
@@ -113,7 +321,7 @@ export default function Break() {
     hasSignaledBreakStartRef.current = true;
 
     try {
-      await ipcRenderer.invokeBreakStart();
+      await ipc.invokeBreakStart();
     } catch (error) {
       hasSignaledBreakStartRef.current = false;
       console.warn("Failed to notify main process to start break", error);
@@ -134,22 +342,36 @@ export default function Break() {
       return;
     }
 
-    void signalBreakStart();
-  }, [countingDown, ready, isPrimaryWindow, sharedBreakEndTime, signalBreakStart]);
+    signalBreakStart().catch((error) => {
+      console.error("Error in signalBreakStart effect:", error);
+    });
+  }, [
+    countingDown,
+    ready,
+    isPrimaryWindow,
+    sharedBreakEndTime,
+    signalBreakStart,
+  ]);
 
   const handleCountdownOver = useCallback(() => {
     if (isPrimaryWindow) {
-      void signalBreakStart();
+      signalBreakStart().catch((error) => {
+        console.error("Error in handleCountdownOver:", error);
+      });
     }
     setCountingDown(false);
   }, [isPrimaryWindow, signalBreakStart]);
 
   const handleStartBreakNow = useCallback(() => {
-    void signalBreakStart();
+    signalBreakStart().catch((error) => {
+      console.error("Error in handleStartBreakNow:", error);
+    });
   }, [signalBreakStart]);
 
   const backgroundImageSource =
-    settings?.backgroundImage?.uri || settings?.backgroundImage?.dataUrl || null;
+    settings?.backgroundImage?.uri ||
+    settings?.backgroundImage?.dataUrl ||
+    null;
   const hasBackgroundImage = Boolean(backgroundImageSource);
 
   useEffect(() => {
@@ -161,7 +383,7 @@ export default function Break() {
     let cancelled = false;
     setBreakWindowReady(hasBackgroundImage ? false : true);
 
-    const renderer = ipcRenderer as typeof ipcRenderer & {
+    const renderer = ipc as typeof ipc & {
       invokeBreakWindowResize?: () => Promise<void>;
     };
 
@@ -195,40 +417,129 @@ export default function Break() {
   }, [closing]);
 
   const handlePostponeBreak = useCallback(async () => {
-    await ipcRenderer.invokeBreakPostpone("snoozed");
-    setClosing(true);
+    await ipc.invokeBreakPostpone("snoozed");
+    if (isMounted.current) {
+      setClosing(true);
+    }
   }, []);
 
   const handleSkipBreak = useCallback(async () => {
-    await ipcRenderer.invokeBreakPostpone("skipped");
-    setClosing(true);
+    await ipc.invokeBreakPostpone("skipped");
+    if (isMounted.current) {
+      setClosing(true);
+    }
   }, []);
 
-  const handleEndBreak = useCallback(async (durationMs?: number) => {
-    if (
-      typeof durationMs === "number" &&
-      Number.isFinite(durationMs) &&
-      durationMs >= 0
-    ) {
-      try {
-        await ipcRenderer.invokeCompleteBreakTracking(durationMs);
-      } catch (error) {
-        console.warn("Failed to record break duration", error);
+  const handleNextBreakMessage = useCallback(async () => {
+    if (switchingMessage) {
+      return;
+    }
+
+    setSwitchingMessage(true);
+
+    try {
+      const response =
+        (await ipc.invokeBreakMessageNext()) as BreakMessageSwitchResult;
+
+      if (!isMounted.current) {
+        return;
+      }
+
+      applySwitchResult(response, { updateTimer: true });
+    } catch (error) {
+      console.warn("Failed to switch break message", error);
+    } finally {
+      if (isMounted.current) {
+        setSwitchingMessage(false);
       }
     }
+  }, [applySwitchResult, switchingMessage]);
 
-    // Only play end sound from primary window
-    const urlParams = new URLSearchParams(window.location.search);
-    const windowId = urlParams.get("windowId");
-    const isPrimary = windowId === "0" || windowId === null;
-
-    if (isPrimary && settings && settings?.soundType !== SoundType.None) {
-      ipcRenderer.invokeEndSound(settings.soundType, settings.breakSoundVolume);
+  const handlePreviousBreakMessage = useCallback(async () => {
+    if (switchingMessage) {
+      return;
     }
 
-    // Broadcast to all windows to start their closing animations
-    await ipcRenderer.invokeBreakEnd();
-  }, [settings]);
+    setSwitchingMessage(true);
+
+    try {
+      const response =
+        (await ipc.invokeBreakMessagePrevious()) as BreakMessageSwitchResult;
+
+      if (!isMounted.current) {
+        return;
+      }
+
+      applySwitchResult(response, { updateTimer: true });
+    } catch (error) {
+      console.warn("Failed to switch to previous break message", error);
+    } finally {
+      if (isMounted.current) {
+        setSwitchingMessage(false);
+      }
+    }
+  }, [applySwitchResult, switchingMessage]);
+
+  const pauseBreak = useCallback(async () => {
+    if (breakPausedRef.current) {
+      return;
+    }
+
+    try {
+      await ipc.invokeBreakPause();
+    } catch (error) {
+      console.warn("Failed to pause break countdown", error);
+    }
+  }, []);
+
+  const resumeBreak = useCallback(async () => {
+    if (!breakPausedRef.current) {
+      return;
+    }
+
+    try {
+      await ipc.invokeBreakResume();
+    } catch (error) {
+      console.warn("Failed to resume break countdown", error);
+    }
+  }, []);
+
+  const adjustBreakDuration = useCallback(async (deltaMs: number) => {
+    try {
+      await ipc.invokeBreakAdjustDuration(deltaMs);
+    } catch (error) {
+      console.warn("Failed to adjust break duration", error);
+    }
+  }, []);
+
+  const handleEndBreak = useCallback(
+    async (durationMs?: number) => {
+      if (
+        typeof durationMs === "number" &&
+        Number.isFinite(durationMs) &&
+        durationMs >= 0
+      ) {
+        try {
+          await ipc.invokeCompleteBreakTracking(durationMs);
+        } catch (error) {
+          console.warn("Failed to record break duration", error);
+        }
+      }
+
+      // Only play end sound from primary window
+      const urlParams = new URLSearchParams(window.location.search);
+      const windowId = urlParams.get("windowId");
+      const isPrimary = windowId === "0" || windowId === null;
+
+      if (isPrimary && settings && settings?.soundType !== SoundType.None) {
+        ipc.invokeEndSound(settings.soundType, settings.breakSoundVolume);
+      }
+
+      // Broadcast to all windows to start their closing animations
+      await ipc.invokeBreakEnd();
+    },
+    [settings]
+  );
 
   if (settings === null || allowPostpone === null) {
     return null;
@@ -249,8 +560,9 @@ export default function Break() {
     !settings.immediatelyStartBreaks;
 
   const fallbackBreakMessage = normalizeBreakMessage(settings.breakMessage);
-  const breakMessageForDisplay =
-    currentBreakMessage ?? fallbackBreakMessage;
+  const breakMessageForDisplay = currentBreakMessage ?? fallbackBreakMessage;
+  const breakMessagesCount = settings.breakMessages?.length ?? 0;
+  const canSkipBreakMessage = breakMessagesCount > 1;
   const rootStyle: CSSProperties = {};
 
   rootStyle.backgroundColor = settings.backgroundColor;
@@ -312,7 +624,9 @@ export default function Break() {
       className="h-full flex items-center justify-center relative"
       style={rootStyle}
       initial={{ opacity: hasBackgroundImage ? 0 : 1 }}
-      animate={{ opacity: closing || (hasBackgroundImage && !breakWindowReady) ? 0 : 1 }}
+      animate={{
+        opacity: closing || (hasBackgroundImage && !breakWindowReady) ? 0 : 1,
+      }}
       transition={{
         duration: 0.5,
         ease: [0.25, 0.46, 0.45, 0.94],
@@ -359,13 +673,31 @@ export default function Break() {
             breakTitle={settings.breakTitle}
             endBreakEnabled={settings.endBreakEnabled}
             onEndBreak={handleEndBreak}
+            onPreviousMessage={
+              canSkipBreakMessage ? handlePreviousBreakMessage : undefined
+            }
+            onPauseBreak={pauseBreak}
+            onResumeBreak={resumeBreak}
+            onAdjustBreakDuration={adjustBreakDuration}
+            onNextMessage={
+              canSkipBreakMessage ? handleNextBreakMessage : undefined
+            }
+            canSkipMessage={canSkipBreakMessage}
+            switchMessagePending={switchingMessage}
+            hasPreviousMessage={hasPreviousMessage}
+            hasNextMessage={hasNextMessage}
             settings={settings}
             uiColor={settings.textColor}
             titleColor={settings.titleTextColor || settings.textColor}
             messageColor={settings.messageTextColor || settings.textColor}
-            messageColorEffect={settings.messageColorEffect || MessageColorEffect.Static}
+            messageColorEffect={
+              settings.messageColorEffect || MessageColorEffect.Static
+            }
+            isPaused={breakPaused}
             isClosing={closing}
             sharedBreakEndTime={sharedBreakEndTime}
+            pausedRemainingMs={pausedRemainingMs}
+            totalDurationMs={breakTotalDurationMs}
           />
         )}
       </motion.div>

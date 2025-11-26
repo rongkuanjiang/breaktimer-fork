@@ -7,7 +7,7 @@ export function showNotification(
   onClick?: (e: Event) => void,
   forceClose = true,
 ): void {
-  let imgPath;
+  let imgPath: string | undefined;
   if (process.platform !== "darwin") {
     imgPath =
       process.env.NODE_ENV === "development"
@@ -22,10 +22,19 @@ export function showNotification(
     silent: process.platform !== "win32",
   });
 
+  let isClosed = false;
+
+  // Track when notification is closed
+  notification.on("close", () => {
+    isClosed = true;
+  });
+
   if (forceClose && process.platform !== "darwin") {
-    // Ensure notification doesn't stay open longer than 10 secs
+    // Ensure notification doesn't stay open longer than 5 secs
     setTimeout(() => {
-      notification.close();
+      if (!isClosed) {
+        notification.close();
+      }
     }, 5000);
   }
 

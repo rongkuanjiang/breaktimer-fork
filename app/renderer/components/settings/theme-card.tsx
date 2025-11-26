@@ -1,6 +1,14 @@
-import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -13,14 +21,21 @@ import {
   MAX_BREAK_ATTACHMENT_BYTES,
   MessageColorEffect,
   Settings,
-  type BreakMessageAttachment,
   normalizeAttachment,
 } from "../../../types/settings";
 import { toast } from "../../toaster";
 
 interface ThemeCardProps {
   settingsDraft: Settings;
-  onTextChange: (field: string, e: React.ChangeEvent<HTMLInputElement>) => void;
+  onTextChange: (
+    field: keyof Settings,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => void;
+  onValueChange: <K extends keyof Settings>(
+    field: K,
+    value: Settings[K]
+  ) => void;
+  onSwitchChange: (field: string, checked: boolean) => void;
   onResetColors: () => void;
 }
 
@@ -30,14 +45,6 @@ const BREATHING_PREVIEWS: Record<MessageColorEffect, string[]> = {
   [MessageColorEffect.BreathingSunset]: ["#ff9966", "#ff5e62", "#ff9966"],
   [MessageColorEffect.BreathingOcean]: ["#43cea2", "#185a9d", "#43cea2"],
 };
-
-function createSyntheticInputEvent<T>(value: T): React.ChangeEvent<HTMLInputElement> {
-  return {
-    target: {
-      value,
-    },
-  } as unknown as React.ChangeEvent<HTMLInputElement>;
-}
 
 const EFFECT_OPTIONS = [
   {
@@ -61,20 +68,32 @@ const EFFECT_OPTIONS = [
 export default function ThemeCard({
   settingsDraft,
   onTextChange,
+  onValueChange,
+  onSwitchChange,
   onResetColors,
 }: ThemeCardProps) {
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isMounted = useRef(false);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const backgroundImageSource =
-    settingsDraft.backgroundImage?.uri || settingsDraft.backgroundImage?.dataUrl || null;
+    settingsDraft.backgroundImage?.uri ||
+    settingsDraft.backgroundImage?.dataUrl ||
+    null;
   const hasBackgroundImage = Boolean(backgroundImageSource);
 
   const customStyle: CSSProperties = useMemo(
     () => ({
       color: settingsDraft.textColor,
     }),
-    [settingsDraft.textColor],
+    [settingsDraft.textColor]
   );
 
   const backgroundPreviewStyle: CSSProperties | undefined = useMemo(() => {
@@ -117,8 +136,8 @@ export default function ThemeCard({
   }, [settingsDraft.messageColorEffect, settingsDraft.messageTextColor]);
 
   const handleBackgroundImageRemove = useCallback(() => {
-    onTextChange("backgroundImage", createSyntheticInputEvent<BreakMessageAttachment | null>(null));
-  }, [onTextChange]);
+    onValueChange("backgroundImage", null);
+  }, [onValueChange]);
 
   const handleBackgroundImageSelect = useCallback(() => {
     fileInputRef.current?.click();
@@ -153,7 +172,8 @@ export default function ThemeCard({
               reject(new Error("Could not read file contents"));
             }
           };
-          reader.onerror = () => reject(reader.error ?? new Error("Could not read file contents"));
+          reader.onerror = () =>
+            reject(reader.error ?? new Error("Could not read file contents"));
           reader.readAsDataURL(source);
         });
       };
@@ -161,6 +181,11 @@ export default function ThemeCard({
       setIsProcessingImage(true);
       try {
         const dataUrl = await readFileAsDataUrl(file);
+
+        if (!isMounted.current) {
+          return;
+        }
+
         const normalized = normalizeAttachment({
           dataUrl,
           mimeType: file.type,
@@ -173,18 +198,25 @@ export default function ThemeCard({
           return;
         }
 
-        onTextChange("backgroundImage", createSyntheticInputEvent(normalized));
+        onValueChange("backgroundImage", normalized);
       } catch {
-        toast("Failed to load the selected image. Please try again.");
+        if (isMounted.current) {
+          toast("Failed to load the selected image. Please try again.");
+        }
       } finally {
-        setIsProcessingImage(false);
+        if (isMounted.current) {
+          setIsProcessingImage(false);
+        }
       }
     },
-    [onTextChange],
+    [onValueChange]
   );
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 space-y-6" style={customStyle}>
+    <div
+      className="rounded-lg border border-border bg-card p-4 space-y-6"
+      style={customStyle}
+    >
       <div className="flex items-center justify-between">
         <h3
           className="text-base font-semibold"
@@ -221,7 +253,7 @@ export default function ThemeCard({
             }}
             type="color"
             value={settingsDraft.backgroundColor}
-            onChange={onTextChange.bind(null, "backgroundColor")}
+            onChange={(e) => onTextChange("backgroundColor", e)}
           />
         </div>
         <div className="space-y-2 col-span-2">
@@ -235,7 +267,9 @@ export default function ThemeCard({
             <div
               className="h-[100px] w-[100px] rounded-md border border-border/60 overflow-hidden bg-black/10 shrink-0"
               style={
-                backgroundPreviewStyle ?? { backgroundColor: settingsDraft.backgroundColor }
+                backgroundPreviewStyle ?? {
+                  backgroundColor: settingsDraft.backgroundColor,
+                }
               }
             >
               {!backgroundImageSource && (
@@ -270,7 +304,8 @@ export default function ThemeCard({
                 onChange={handleBackgroundImageChange}
               />
               <p className="text-xs text-muted-foreground max-w-xs">
-                Images up to 4 MB. The background color is applied to the message card for readability.
+                Images up to 4 MB. The background color is applied to the
+                message card for readability.
               </p>
             </div>
           </div>
@@ -287,7 +322,7 @@ export default function ThemeCard({
             style={{ backgroundColor: settingsDraft.textColor }}
             type="color"
             value={settingsDraft.textColor}
-            onChange={onTextChange.bind(null, "textColor")}
+            onChange={(e) => onTextChange("textColor", e)}
           />
         </div>
         <div className="space-y-2">
@@ -302,7 +337,7 @@ export default function ThemeCard({
             style={{ backgroundColor: settingsDraft.titleTextColor }}
             type="color"
             value={settingsDraft.titleTextColor}
-            onChange={onTextChange.bind(null, "titleTextColor")}
+            onChange={(e) => onTextChange("titleTextColor", e)}
           />
         </div>
         <div className="space-y-2">
@@ -317,7 +352,7 @@ export default function ThemeCard({
             style={{ backgroundColor: settingsDraft.messageTextColor }}
             type="color"
             value={settingsDraft.messageTextColor}
-            onChange={onTextChange.bind(null, "messageTextColor")}
+            onChange={(e) => onTextChange("messageTextColor", e)}
           />
         </div>
       </div>
@@ -332,7 +367,7 @@ export default function ThemeCard({
         <Select
           value={settingsDraft.messageColorEffect}
           onValueChange={(value) =>
-            onTextChange("messageColorEffect", createSyntheticInputEvent(value))
+            onValueChange("messageColorEffect", value as MessageColorEffect)
           }
         >
           <SelectTrigger className="w-56">
@@ -347,7 +382,12 @@ export default function ThemeCard({
           </SelectContent>
         </Select>
         <div className="rounded-md border border-border/40 px-4 py-3 bg-black/10 flex items-center justify-between">
-          <span className="text-xs uppercase tracking-wide" style={{ color: settingsDraft.textColor }}>Preview</span>
+          <span
+            className="text-xs uppercase tracking-wide"
+            style={{ color: settingsDraft.textColor }}
+          >
+            Preview
+          </span>
           <motion.span
             className="text-sm font-medium px-3 py-1 rounded-md"
             initial={messagePreview.initial}
@@ -356,6 +396,52 @@ export default function ThemeCard({
           >
             Take a deep breath
           </motion.span>
+        </div>
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center justify-between gap-4 rounded-md border border-border/40 px-4 py-3 bg-black/5">
+            <div className="flex flex-col text-left">
+              <span
+                className="text-sm font-medium"
+                style={{ color: settingsDraft.textColor }}
+              >
+                Apply to title
+              </span>
+              <span
+                className="text-xs"
+                style={{ color: settingsDraft.textColor, opacity: 0.7 }}
+              >
+                Use the same color effect on the break title.
+              </span>
+            </div>
+            <Switch
+              checked={settingsDraft.applyMessageColorEffectToTitle}
+              onCheckedChange={(checked) =>
+                onSwitchChange("applyMessageColorEffectToTitle", checked)
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border border-border/40 px-4 py-3 bg-black/5">
+            <div className="flex flex-col text-left">
+              <span
+                className="text-sm font-medium"
+                style={{ color: settingsDraft.textColor }}
+              >
+                Apply to buttons
+              </span>
+              <span
+                className="text-xs"
+                style={{ color: settingsDraft.textColor, opacity: 0.7 }}
+              >
+                Animate the action buttons with the message effect.
+              </span>
+            </div>
+            <Switch
+              checked={settingsDraft.applyMessageColorEffectToButtons}
+              onCheckedChange={(checked) =>
+                onSwitchChange("applyMessageColorEffectToButtons", checked)
+              }
+            />
+          </div>
         </div>
       </div>
     </div>

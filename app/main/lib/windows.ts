@@ -113,6 +113,7 @@ export function createBreakWindows(): void {
     const notificationHeight = 80;
     const breakWindow = new BrowserWindow({
       show: false,
+      skipTaskbar: true,
       autoHideMenuBar: true,
       frame: false,
       backgroundColor: "#00000000",
@@ -130,10 +131,22 @@ export function createBreakWindows(): void {
       },
     });
 
+    const enforceOverlayZOrder = (): void => {
+      if (breakWindow.isDestroyed()) {
+        return;
+      }
+      if (process.platform === "win32" || process.platform === "darwin") {
+        breakWindow.setAlwaysOnTop(true, "screen-saver");
+      } else {
+        breakWindow.setAlwaysOnTop(true);
+      }
+      breakWindow.setSkipTaskbar(true);
+      breakWindow.moveTop();
+    };
+
     breakWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    breakWindow.setAlwaysOnTop(true);
+    enforceOverlayZOrder();
     breakWindow.setFullScreenable(false);
-    breakWindow.moveTop();
 
     if (process.platform === "darwin") {
       // setVisibleOnAllWorkspaces seems to have a bug that causes the dock to
@@ -150,9 +163,12 @@ export function createBreakWindows(): void {
         throw new Error('"breakWindow" is not defined');
       }
 
+      enforceOverlayZOrder();
+
       fallbackShowTimeout = setTimeout(() => {
         if (!breakWindow || breakWindow.isDestroyed()) return;
         if (!breakWindow.isVisible()) {
+          enforceOverlayZOrder();
           breakWindow.showInactive();
           breakWindow.moveTop();
         }
@@ -197,6 +213,7 @@ export function createBreakWindows(): void {
 export function closeBreakWindows(): void {
   const firstWin = breakWindows[0];
   if (!firstWin) return;
+  if (firstWin.isDestroyed()) return;
   if (!firstWin.closable) return;
 
   // The window's `.close` cleanup function will do everything else we need

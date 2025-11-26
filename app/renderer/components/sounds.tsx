@@ -2,11 +2,14 @@ import { Howl } from "howler";
 import { useEffect } from "react";
 import { SoundType } from "../../types/settings";
 
+import { useIpc } from "../contexts/ipc-context";
+
 export default function Sounds() {
+  const ipc = useIpc();
   const playSound = (
     type: string,
     isStart: boolean,
-    volume: number = 1,
+    volume: number = 1
   ): void => {
     if (type === SoundType.None) return;
     const sound = new Howl({
@@ -17,13 +20,22 @@ export default function Sounds() {
   };
 
   useEffect(() => {
-    ipcRenderer.onPlayStartSound((type: string, volume: number = 1) => {
-      playSound(type, true, volume);
-    });
+    const removeStartListener = ipc.onPlayStartSound(
+      (type: string, volume: number = 1) => {
+        playSound(type, true, volume);
+      }
+    );
 
-    ipcRenderer.onPlayEndSound((type: string, volume: number = 1) => {
-      playSound(type, false, volume);
-    });
+    const removeEndListener = ipc.onPlayEndSound(
+      (type: string, volume: number = 1) => {
+        playSound(type, false, volume);
+      }
+    );
+
+    return () => {
+      removeStartListener();
+      removeEndListener();
+    };
   }, []);
 
   return null;

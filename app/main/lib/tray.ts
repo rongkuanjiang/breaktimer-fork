@@ -21,6 +21,8 @@ import { closeBreakWindows, createSettingsWindow } from "./windows";
 
 let tray: Tray;
 let lastMinsLeft = 0;
+let trayUpdateInterval: NodeJS.Timeout | null = null;
+let quitTimeout: NodeJS.Timeout | null = null;
 
 const rootPath = path.dirname(app.getPath("exe"));
 const resourcesPath =
@@ -28,13 +30,13 @@ const resourcesPath =
     ? path.resolve(rootPath, "..", "Resources")
     : rootPath;
 
-function checkDisableTimeout() {
+async function checkDisableTimeout() {
   const disableEndTime = getDisableEndTime();
 
   if (disableEndTime && Date.now() >= disableEndTime) {
     setDisableEndTime(null);
     const settings = getSettings();
-    setSettings({ ...settings, breaksEnabled: true });
+    await setSettings({ ...settings, breaksEnabled: true });
     buildTray();
   }
 }
@@ -88,7 +90,7 @@ export function buildTray(): void {
   let settings: Settings = getSettings();
   const breaksEnabled = settings.breaksEnabled;
 
-  const setBreaksEnabled = (breaksEnabled: boolean): void => {
+  const setBreaksEnabled = async (breaksEnabled: boolean): Promise<void> => {
     if (breaksEnabled) {
       log.info("Enabled breaks");
       setDisableEndTime(null);
@@ -97,16 +99,16 @@ export function buildTray(): void {
     }
 
     settings = getSettings();
-    setSettings({ ...settings, breaksEnabled });
+    await setSettings({ ...settings, breaksEnabled });
     buildTray();
   };
 
-  const disableIndefinitely = (): void => {
+  const disableIndefinitely = async (): Promise<void> => {
     log.info("Disabled breaks indefinitely");
-    setBreaksEnabled(false);
+    await setBreaksEnabled(false);
   };
 
-  const disableBreaksFor = (duration: number): void => {
+  const disableBreaksFor = async (duration: number): Promise<void> => {
     const minutes = Math.floor(duration / 60000);
     const hours = Math.floor(minutes / 60);
     const displayMinutes = minutes % 60;
@@ -117,7 +119,7 @@ export function buildTray(): void {
       log.info(`Disabled breaks for ${minutes}m`);
     }
 
-    setBreaksEnabled(false);
+    await setBreaksEnabled(false);
     const endTime = Date.now() + duration;
     setDisableEndTime(endTime);
     buildTray();
@@ -133,7 +135,10 @@ export function buildTray(): void {
   };
 
   const quit = (): void => {
-    setTimeout(() => {
+    if (quitTimeout !== null) {
+      clearTimeout(quitTimeout);
+    }
+    quitTimeout = setTimeout(() => {
       app.exit(0);
     });
   };
@@ -193,13 +198,25 @@ export function buildTray(): void {
       label: "Disable...",
       submenu: [
         { label: "Indefinitely", click: disableIndefinitely },
-        { label: "30 minutes", click: () => disableBreaksFor(30 * 60 * 1000) },
-        { label: "1 hour", click: () => disableBreaksFor(60 * 60 * 1000) },
-        { label: "2 hours", click: () => disableBreaksFor(2 * 60 * 60 * 1000) },
-        { label: "4 hours", click: () => disableBreaksFor(4 * 60 * 60 * 1000) },
+        {
+          label: "30 minutes",
+          click: async () => await disableBreaksFor(30 * 60 * 1000),
+        },
+        {
+          label: "1 hour",
+          click: async () => await disableBreaksFor(60 * 60 * 1000),
+        },
+        {
+          label: "2 hours",
+          click: async () => await disableBreaksFor(2 * 60 * 60 * 1000),
+        },
+        {
+          label: "4 hours",
+          click: async () => await disableBreaksFor(4 * 60 * 60 * 1000),
+        },
         {
           label: "Rest of day",
-          click: () => {
+          click: async () => {
             const now = new Date();
             const endOfDay = new Date(
               now.getFullYear(),
@@ -209,7 +226,7 @@ export function buildTray(): void {
               59,
               59,
             );
-            disableBreaksFor(endOfDay.getTime() - now.getTime());
+            await disableBreaksFor(endOfDay.getTime() - now.getTime());
           },
         },
       ],
@@ -237,8 +254,14 @@ export function initTray(): void {
   buildTray();
   let lastDisableText = getDisableTimeRemaining();
 
-  setInterval(() => {
-    checkDisableTimeout();
+  // Clear existing interval to prevent memory leak
+  if (trayUpdateInterval !== null) {
+    clearInterval(trayUpdateInterval);
+  }
+
+  // Store interval ID so it can be cleared later
+  trayUpdateInterval = setInterval(async () => {
+    await checkDisableTimeout();
 
     const currentDisableText = getDisableTimeRemaining();
     if (currentDisableText !== lastDisableText) {
@@ -257,4 +280,17 @@ export function initTray(): void {
       lastMinsLeft = minsLeft;
     }
   }, 5000);
+}
+
+export function destroyTray(): void {
+  // Clean up interval
+  if (trayUpdateInterval !== null) {
+    clearInterval(trayUpdateInterval);
+    trayUpdateInterval = null;
+  }
+
+  // Clean up tray
+  if (tray) {
+    tray.destroy();
+  }
 }

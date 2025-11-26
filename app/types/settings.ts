@@ -13,6 +13,44 @@ export interface WorkingHours {
   ranges: WorkingHoursRange[];
 }
 
+/**
+ * Validates that working hours ranges don't overlap.
+ * Returns an error message if overlaps are found, null otherwise.
+ */
+export function validateWorkingHoursRanges(
+  ranges: WorkingHoursRange[],
+): string | null {
+  if (!ranges || ranges.length <= 1) {
+    return null;
+  }
+
+  // Sort ranges by start time for easier overlap detection
+  const sortedRanges = [...ranges].sort(
+    (a, b) => a.fromMinutes - b.fromMinutes,
+  );
+
+  for (let i = 0; i < sortedRanges.length - 1; i++) {
+    const current = sortedRanges[i];
+    const next = sortedRanges[i + 1];
+
+    // Check if current range overlaps with next range
+    if (current.toMinutes > next.fromMinutes) {
+      return `Working hours overlap: ${formatMinutes(current.fromMinutes)}-${formatMinutes(current.toMinutes)} overlaps with ${formatMinutes(next.fromMinutes)}-${formatMinutes(next.toMinutes)}`;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Helper function to format minutes as HH:MM time string
+ */
+function formatMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
+
 export enum SoundType {
   None = "NONE",
   Gong = "GONG",
@@ -64,7 +102,7 @@ function createAttachmentId(): string {
 }
 
 function estimateDataUrlBytes(dataUrl: string): number {
-  const commaIndex = dataUrl.indexOf(',');
+  const commaIndex = dataUrl.indexOf(",");
   if (commaIndex === -1) {
     return 0;
   }
@@ -75,7 +113,7 @@ function estimateDataUrlBytes(dataUrl: string): number {
     return 0;
   }
 
-  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((base64Length * 3) / 4) - padding);
 }
 
@@ -115,7 +153,10 @@ function sanitizeAttachment(
         ? estimateDataUrlBytes(dataUrl)
         : undefined;
 
-  if (sizeBytesCandidate !== undefined && sizeBytesCandidate > MAX_BREAK_ATTACHMENT_BYTES) {
+  if (
+    sizeBytesCandidate !== undefined &&
+    sizeBytesCandidate > MAX_BREAK_ATTACHMENT_BYTES
+  ) {
     return null;
   }
 
@@ -241,17 +282,24 @@ export interface Settings {
   breakSoundVolume: number;
   breakTitle: string;
   breakMessage: string;
-  // New: optional list of messages. If present and non-empty, one is chosen at random each break.
+  // Daily messages: optional list of messages. If present and non-empty, one is chosen at random each break.
   breakMessages?: BreakMessageContent[];
   breakMessagesMode?: BreakMessagesMode; // RANDOM (default) or SEQUENTIAL
   breakMessagesNextIndex?: number; // internal pointer for sequential mode
   breakMessagesOrder?: number[]; // stored shuffle order for sequential mode
+  // Monthly messages: optional list of messages. Similar to daily messages but for monthly rotation.
+  monthlyMessages?: BreakMessageContent[];
+  monthlyMessagesMode?: BreakMessagesMode; // RANDOM (default) or SEQUENTIAL
+  monthlyMessagesNextIndex?: number; // internal pointer for sequential mode
+  monthlyMessagesOrder?: number[]; // stored shuffle order for sequential mode
   backgroundColor: string;
   backgroundImage: BreakMessageAttachment | null;
   textColor: string;
   titleTextColor: string;
   messageTextColor: string;
   messageColorEffect: MessageColorEffect;
+  applyMessageColorEffectToTitle: boolean;
+  applyMessageColorEffectToButtons: boolean;
   showBackdrop: boolean;
   backdropOpacity: number;
   endBreakEnabled: boolean;
@@ -318,12 +366,18 @@ export const defaultSettings: Settings = {
   breakMessagesMode: BreakMessagesMode.Random,
   breakMessagesNextIndex: 0,
   breakMessagesOrder: [0],
+  monthlyMessages: [],
+  monthlyMessagesMode: BreakMessagesMode.Random,
+  monthlyMessagesNextIndex: 0,
+  monthlyMessagesOrder: [],
   backgroundColor: "#16a085",
   backgroundImage: null,
   textColor: "#ffffff",
   titleTextColor: "#ffffff",
   messageTextColor: "#ffffff",
   messageColorEffect: MessageColorEffect.Static,
+  applyMessageColorEffectToTitle: false,
+  applyMessageColorEffectToButtons: false,
   showBackdrop: true,
   backdropOpacity: 0.7,
   endBreakEnabled: true,

@@ -34,6 +34,22 @@ export default function TimeInput({
 
   // Track which field is currently focused to avoid formatting during user input
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [nextFocus, setNextFocus] = useState<"minutes" | "seconds" | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (nextFocus === "minutes" && minutesRef.current) {
+      minutesRef.current.focus();
+      minutesRef.current.select();
+    } else if (nextFocus === "seconds" && secondsRef.current) {
+      secondsRef.current.focus();
+      secondsRef.current.select();
+    }
+    if (nextFocus) {
+      setNextFocus(null);
+    }
+  }, [nextFocus]);
 
   // Update internal value when external value changes (but not during user input)
   useEffect(() => {
@@ -59,18 +75,24 @@ export default function TimeInput({
 
   const handleChange = (
     field: "hours" | "minutes" | "seconds",
-    newValue: string,
+    newValue: string
   ) => {
     const updated = { ...internalValue, [field]: newValue };
     setInternalValue(updated);
 
     // Convert back to total seconds with validation
-    const hours = Math.min(23, Math.max(0, parseInt(updated.hours) || 0));
-    const minutes = Math.min(59, Math.max(0, parseInt(updated.minutes) || 0));
-    const seconds =
+    let hours = Math.min(24, Math.max(0, parseInt(updated.hours) || 0));
+    let minutes = Math.min(59, Math.max(0, parseInt(updated.minutes) || 0));
+    let seconds =
       precision === "seconds"
         ? Math.min(59, Math.max(0, parseInt(updated.seconds) || 0))
         : 0;
+
+    // If hours is 24, force minutes and seconds to 0 (24:00:00 is valid, 24:01:00 is not)
+    if (hours === 24) {
+      minutes = 0;
+      seconds = 0;
+    }
 
     const totalSeconds = hours * 3600 + minutes * 60 + seconds;
     onChange(totalSeconds);
@@ -78,11 +100,17 @@ export default function TimeInput({
 
   const cycleValue = (
     field: "hours" | "minutes" | "seconds",
-    direction: "up" | "down",
+    direction: "up" | "down"
   ) => {
     const current = parseInt(internalValue[field]) || 0;
+    const hours = parseInt(internalValue.hours) || 0;
     let max = 59;
-    if (field === "hours") max = 23;
+    if (field === "hours") max = 24;
+
+    // If hours is 24, minutes and seconds can't be cycled (must stay at 0)
+    if (hours === 24 && field !== "hours") {
+      return;
+    }
 
     let newValue;
     if (direction === "up") {
@@ -96,7 +124,7 @@ export default function TimeInput({
 
   const handleKeyDown = (
     field: "hours" | "minutes" | "seconds",
-    e: KeyboardEvent<HTMLInputElement>,
+    e: KeyboardEvent<HTMLInputElement>
   ) => {
     if (disabled) return;
 
@@ -141,7 +169,7 @@ export default function TimeInput({
 
   const handleFocus = (
     field: "hours" | "minutes" | "seconds",
-    e: React.FocusEvent<HTMLInputElement>,
+    e: React.FocusEvent<HTMLInputElement>
   ) => {
     // Track focused field and select all text when focusing
     setFocusedField(field);
@@ -162,7 +190,7 @@ export default function TimeInput({
 
   const handleInputChange = (
     field: "hours" | "minutes" | "seconds",
-    e: React.ChangeEvent<HTMLInputElement>,
+    e: React.ChangeEvent<HTMLInputElement>
   ) => {
     let rawValue = e.target.value;
 
@@ -177,32 +205,30 @@ export default function TimeInput({
     setInternalValue(updated);
 
     // Convert to seconds and call onChange
-    const hours = parseInt(updated.hours) || 0;
-    const minutes = parseInt(updated.minutes) || 0;
-    const seconds =
-      precision === "seconds" ? parseInt(updated.seconds) || 0 : 0;
+    let hours = parseInt(updated.hours) || 0;
+    let minutes = parseInt(updated.minutes) || 0;
+    let seconds = precision === "seconds" ? parseInt(updated.seconds) || 0 : 0;
+
+    // If hours is 24, force minutes and seconds to 0 (24:00:00 is valid, 24:01:00 is not)
+    if (hours >= 24) {
+      hours = 24;
+      minutes = 0;
+      seconds = 0;
+    }
 
     const totalSeconds = Math.min(
-      86399,
-      Math.max(0, hours * 3600 + minutes * 60 + seconds),
+      86400,
+      Math.max(0, hours * 3600 + minutes * 60 + seconds)
     );
     onChange(totalSeconds);
 
     // Auto-advance to next field when 2 digits are entered
     if (cleanValue.length === 2) {
-      setTimeout(() => {
-        if (field === "hours" && minutesRef.current) {
-          minutesRef.current.focus();
-          minutesRef.current.select();
-        } else if (
-          field === "minutes" &&
-          precision === "seconds" &&
-          secondsRef.current
-        ) {
-          secondsRef.current.focus();
-          secondsRef.current.select();
-        }
-      }, 0);
+      if (field === "hours") {
+        setNextFocus("minutes");
+      } else if (field === "minutes" && precision === "seconds") {
+        setNextFocus("seconds");
+      }
     }
   };
 
@@ -211,7 +237,7 @@ export default function TimeInput({
       className={cn(
         "inline-block border border-input bg-transparent dark:bg-input/30 rounded-md px-3 py-2 text-sm shadow-xs focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]",
         disabled && "opacity-50 cursor-not-allowed",
-        className,
+        className
       )}
     >
       <input

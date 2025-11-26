@@ -3,13 +3,16 @@ import log from "electron-log";
 import {
   defaultSettings,
   Settings,
+  normalizeBreakMessage,
   normalizeBreakMessages,
   BreakMessageAttachment,
   BreakMessageContent,
   MessageColorEffect,
   BreakMessagesMode,
+  validateWorkingHoursRanges,
+  daysConfig,
 } from "../../types/settings";
-import { setAutoLauch } from "./auto-launch";
+import { setAutoLaunch } from "./auto-launch";
 import { initBreaks } from "./breaks";
 import {
   attachmentExists,
@@ -47,17 +50,17 @@ class AttachmentPersistenceError extends Error {
   }
 }
 
+type MigrationSettings = Partial<Settings> & Record<string, unknown>;
+
 interface Migration {
   version: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  migrate: (settings: any) => any;
+  migrate: (settings: MigrationSettings) => MigrationSettings;
 }
 
 const migrations: Migration[] = [
   {
     version: 1,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       // Working hours migration
       if (
         settings.workingHoursMonday &&
@@ -71,8 +74,8 @@ const migrations: Migration[] = [
         });
 
         const defaultRange = oldToNew(
-          new Date(settings.workingHoursFrom),
-          new Date(settings.workingHoursTo),
+          new Date(settings.workingHoursFrom as string | number | Date),
+          new Date(settings.workingHoursTo as string | number | Date),
         );
 
         [
@@ -99,8 +102,7 @@ const migrations: Migration[] = [
   },
   {
     version: 2,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       // Date to seconds migration
       if (settings.breakFrequency && !settings.breakFrequencySeconds) {
         console.log("Migrating date-based settings to seconds");
@@ -116,26 +118,28 @@ const migrations: Migration[] = [
         // Convert Date objects to seconds
         if (settings.breakFrequency) {
           settings.breakFrequencySeconds = extractSeconds(
-            settings.breakFrequency,
+            settings.breakFrequency as string | Date,
           );
           delete settings.breakFrequency;
         }
 
         if (settings.breakLength) {
-          settings.breakLengthSeconds = extractSeconds(settings.breakLength);
+          settings.breakLengthSeconds = extractSeconds(
+            settings.breakLength as string | Date,
+          );
           delete settings.breakLength;
         }
 
         if (settings.postponeLength) {
           settings.postponeLengthSeconds = extractSeconds(
-            settings.postponeLength,
+            settings.postponeLength as string | Date,
           );
           delete settings.postponeLength;
         }
 
         if (settings.idleResetLength) {
           settings.idleResetLengthSeconds = extractSeconds(
-            settings.idleResetLength,
+            settings.idleResetLength as string | Date,
           );
           delete settings.idleResetLength;
         }
@@ -145,29 +149,17 @@ const migrations: Migration[] = [
   },
   {
     version: 3,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       // Introduce breakMessages array; migrate existing breakMessage if present
       if (!settings.breakMessages) {
         if (settings.breakMessage) {
-          settings.breakMessages = [settings.breakMessage];
+          settings.breakMessages = [
+            normalizeBreakMessage(settings.breakMessage as string),
+          ];
         } else if (defaultSettings.breakMessage) {
-          settings.breakMessages = [defaultSettings.breakMessage];
-        } else {
-          settings.breakMessages = [];
-        }
-      }
-      return settings;
-    },
-  },
-  {
-    version: 3,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
-      // Initialize breakMessages array if not present
-      if (!settings.breakMessages) {
-        if (settings.breakMessage) {
-          settings.breakMessages = [settings.breakMessage];
+          settings.breakMessages = [
+            normalizeBreakMessage(defaultSettings.breakMessage),
+          ];
         } else {
           settings.breakMessages = [];
         }
@@ -177,10 +169,9 @@ const migrations: Migration[] = [
   },
   {
     version: 4,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       if (!settings.breakMessagesMode) {
-        settings.breakMessagesMode = "RANDOM";
+        settings.breakMessagesMode = BreakMessagesMode.Random;
       }
       if (typeof settings.breakMessagesNextIndex !== "number") {
         settings.breakMessagesNextIndex = 0;
@@ -190,8 +181,7 @@ const migrations: Migration[] = [
   },
   {
     version: 5,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       if (!Array.isArray(settings.breakMessagesOrder)) {
         settings.breakMessagesOrder = [];
       }
@@ -201,14 +191,18 @@ const migrations: Migration[] = [
 
   {
     version: 6,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       const messages = normalizeBreakMessages(settings.breakMessages);
 
       if (messages.length > 0) {
         settings.breakMessages = messages;
-      } else if (typeof settings.breakMessage === "string" && settings.breakMessage.length > 0) {
-        settings.breakMessages = normalizeBreakMessages([settings.breakMessage]);
+      } else if (
+        typeof settings.breakMessage === "string" &&
+        settings.breakMessage.length > 0
+      ) {
+        settings.breakMessages = normalizeBreakMessages([
+          settings.breakMessage,
+        ]);
       } else {
         settings.breakMessages = [];
       }
@@ -218,8 +212,7 @@ const migrations: Migration[] = [
   },
   {
     version: 7,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       if (Array.isArray(settings.breakMessages)) {
         settings.breakMessages = persistAttachments(settings.breakMessages);
       }
@@ -228,13 +221,14 @@ const migrations: Migration[] = [
   },
   {
     version: 8,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       if (!settings.titleTextColor) {
-        settings.titleTextColor = settings.textColor || defaultSettings.textColor;
+        settings.titleTextColor =
+          settings.textColor || defaultSettings.textColor;
       }
       if (!settings.messageTextColor) {
-        settings.messageTextColor = settings.textColor || defaultSettings.textColor;
+        settings.messageTextColor =
+          settings.textColor || defaultSettings.textColor;
       }
       if (!settings.messageColorEffect) {
         settings.messageColorEffect = MessageColorEffect.Static;
@@ -244,8 +238,7 @@ const migrations: Migration[] = [
   },
   {
     version: 9,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    migrate: (settings: any) => {
+    migrate: (settings: MigrationSettings) => {
       if (typeof settings.backgroundImage === "undefined") {
         settings.backgroundImage = null;
       }
@@ -254,7 +247,9 @@ const migrations: Migration[] = [
   },
 ];
 
-function collectAttachmentIds(messages: BreakMessageContent[] | undefined): Set<string> {
+function collectAttachmentIds(
+  messages: BreakMessageContent[] | undefined,
+): Set<string> {
   const ids = new Set<string>();
   if (!Array.isArray(messages)) {
     return ids;
@@ -285,7 +280,10 @@ function persistAttachments(
 
   const newAttachmentIds: string[] = [];
 
-  const persistMessage = (message: BreakMessageContent, messageIndex: number): BreakMessageContent => {
+  const persistMessage = (
+    message: BreakMessageContent,
+    messageIndex: number,
+  ): BreakMessageContent => {
     const persisted: BreakMessageAttachment[] = [];
 
     for (const attachment of message.attachments || []) {
@@ -351,7 +349,11 @@ function persistAttachments(
       try {
         deleteAttachment(id);
       } catch (cleanupError) {
-        log.warn("Failed to clean up attachment after persistence error", id, cleanupError);
+        log.warn(
+          "Failed to clean up attachment after persistence error",
+          id,
+          cleanupError,
+        );
       }
     }
     throw error;
@@ -418,16 +420,19 @@ function persistBackgroundImage(
 }
 
 function normalizeSequentialIndex(value: unknown, orderLength: number): number {
-  if (!Number.isInteger(value) || orderLength <= 0) {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    orderLength <= 0
+  ) {
     return 0;
   }
 
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) {
+  if (!Number.isFinite(value)) {
     return 0;
   }
 
-  const normalized = ((numericValue % orderLength) + orderLength) % orderLength;
+  const normalized = ((value % orderLength) + orderLength) % orderLength;
   return normalized;
 }
 
@@ -479,8 +484,7 @@ const store = new Store({
   },
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function migrateSettings(settings: any): Settings {
+function migrateSettings(settings: MigrationSettings): Settings {
   let currentVersion = store.get("settingsVersion") as number;
   const pendingMigrations = migrations
     .filter((m) => m.version > currentVersion)
@@ -494,61 +498,92 @@ function migrateSettings(settings: any): Settings {
     );
 
     let migratedSettings = { ...settings };
+    let targetVersion = currentVersion;
 
     for (const migration of pendingMigrations) {
       try {
         console.log(`Applying migration version ${migration.version}`);
         migratedSettings = migration.migrate(migratedSettings);
-        currentVersion = migration.version;
+        targetVersion = migration.version;
       } catch (error) {
         console.error(
           `Failed to apply migration version ${migration.version}:`,
           error,
         );
-        break;
+        log.error(
+          `Migration ${migration.version} failed. Aborting migration process and keeping settings at version ${currentVersion}.`,
+          error,
+        );
+        // Rollback: do not save partial migration state
+        return settings as Settings;
       }
     }
 
-    // Save migrated settings and update version
+    // Only save if all migrations succeeded
     store.set("settings", migratedSettings);
-    store.set("settingsVersion", currentVersion);
+    store.set("settingsVersion", targetVersion);
 
-    console.log(`Migrations completed. New version: ${currentVersion}`);
-    return migratedSettings;
+    console.log(`Migrations completed. New version: ${targetVersion}`);
+    return migratedSettings as Settings;
   }
 
-  return settings;
+  return settings as Settings;
 }
 
 export function getSettings(): Settings {
-  const settings = store.get("settings");
+  const settings = store.get("settings") as MigrationSettings;
   const migratedSettings = migrateSettings(settings);
-  const merged = Object.assign({}, defaultSettings, migratedSettings) as Settings;
+  const merged = Object.assign(
+    {},
+    defaultSettings,
+    migratedSettings,
+  ) as Settings;
   merged.breakMessages = normalizeBreakMessages(merged.breakMessages);
   return merged;
 }
 
-export function setSettings(settings: Settings, resetBreaks = true): void {
+export async function setSettings(
+  settings: Settings,
+  resetBreaks = true,
+): Promise<void> {
   const currentSettings = getSettings();
   const cleanupAttachmentIds: string[] = [];
 
   try {
     if (currentSettings.autoLaunch !== settings.autoLaunch) {
-      setAutoLauch(settings.autoLaunch);
+      await setAutoLaunch(settings.autoLaunch);
+    }
+
+    // Validate working hours ranges don't overlap
+    for (const dayConfig of daysConfig) {
+      const daySettings = settings[dayConfig.key];
+      if (daySettings.enabled && daySettings.ranges.length > 1) {
+        const validationError = validateWorkingHoursRanges(daySettings.ranges);
+        if (validationError) {
+          throw new Error(`${dayConfig.label}: ${validationError}`);
+        }
+      }
     }
 
     const normalizedMessages = normalizeBreakMessages(settings.breakMessages);
     const persistedMessages = persistAttachments(normalizedMessages, {
       onPersist: (attachment) => cleanupAttachmentIds.push(attachment.id),
     });
-    const persistedBackgroundImage = persistBackgroundImage(settings.backgroundImage, {
-      onPersist: (attachment) => cleanupAttachmentIds.push(attachment.id),
-    });
+    const persistedBackgroundImage = persistBackgroundImage(
+      settings.backgroundImage,
+      {
+        onPersist: (attachment) => cleanupAttachmentIds.push(attachment.id),
+      },
+    );
 
     const titleTextColor = settings.titleTextColor || settings.textColor;
     const messageTextColor = settings.messageTextColor || settings.textColor;
     const messageColorEffect =
       settings.messageColorEffect || MessageColorEffect.Static;
+    const applyMessageColorEffectToTitle =
+      settings.applyMessageColorEffectToTitle ?? false;
+    const applyMessageColorEffectToButtons =
+      settings.applyMessageColorEffectToButtons ?? false;
 
     const breakMessagesMode =
       settings.breakMessagesMode ??
@@ -560,6 +595,8 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
       titleTextColor,
       messageTextColor,
       messageColorEffect,
+      applyMessageColorEffectToTitle,
+      applyMessageColorEffectToButtons,
       breakMessagesMode,
       breakMessages: persistedMessages,
       backgroundImage: persistedBackgroundImage,
@@ -580,7 +617,9 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
       }
     }
 
-    const currentAttachmentIds = collectAttachmentIds(currentSettings.breakMessages);
+    const currentAttachmentIds = collectAttachmentIds(
+      currentSettings.breakMessages,
+    );
     if (currentSettings.backgroundImage?.id) {
       currentAttachmentIds.add(currentSettings.backgroundImage.id);
     }
@@ -605,7 +644,11 @@ export function setSettings(settings: Settings, resetBreaks = true): void {
       try {
         deleteAttachment(id);
       } catch (cleanupError) {
-        log.warn("Failed to clean up attachment after settings save error", id, cleanupError);
+        log.warn(
+          "Failed to clean up attachment after settings save error",
+          id,
+          cleanupError,
+        );
       }
     }
     throw error;
@@ -620,9 +663,9 @@ export function setAppInitialized(): void {
   store.set({ appInitialized: true });
 }
 
-export function setBreaksEnabled(breaksEnabled: boolean): void {
+export async function setBreaksEnabled(breaksEnabled: boolean): Promise<void> {
   const settings: Settings = getSettings();
-  setSettings({ ...settings, breaksEnabled }, false);
+  await setSettings({ ...settings, breaksEnabled }, false);
 }
 
 export function setDisableEndTime(endTime: number | null): void {

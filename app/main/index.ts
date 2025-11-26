@@ -2,9 +2,9 @@ import { app, shell } from "electron";
 import electronDebug from "electron-debug";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
-import { setAutoLauch } from "./lib/auto-launch";
+import { setAutoLaunch } from "./lib/auto-launch";
 import { initAttachmentStore } from "./lib/attachments";
-import { initBreaks } from "./lib/breaks";
+import { initBreaks, cleanupBreaks } from "./lib/breaks";
 import "./lib/ipc";
 import { showNotification } from "./lib/notifications";
 import { getAppInitialized } from "./lib/store";
@@ -113,6 +113,12 @@ app.on("window-all-closed", () => {
   // Pass
 });
 
+// Cleanup intervals and resources before app quits
+app.on("before-quit", () => {
+  log.info("App quitting, cleaning up breaks interval");
+  cleanupBreaks();
+});
+
 app.on("ready", async () => {
   if (
     process.env.NODE_ENV === "development" ||
@@ -137,7 +143,7 @@ app.on("ready", async () => {
 
   if (!appInitialized) {
     if (process.env.NODE_ENV !== "development") {
-      setAutoLauch(true);
+      await setAutoLaunch(true);
     }
     // Show settings window on first launch instead of notification
     createSettingsWindow();

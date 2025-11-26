@@ -3,7 +3,10 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import log from "electron-log";
-import { BreakMessageAttachment, MAX_BREAK_ATTACHMENT_BYTES } from "../../types/settings";
+import {
+  BreakMessageAttachment,
+  MAX_BREAK_ATTACHMENT_BYTES,
+} from "../../types/settings";
 
 type SaveOptions = {
   mimeType?: string;
@@ -79,7 +82,9 @@ export function initAttachmentStore(): void {
   if (!protocolRegistered) {
     protocol.registerFileProtocol("attachment", (request, callback) => {
       try {
-        const fileName = decodeURIComponent(request.url.replace("attachment://", ""));
+        const fileName = decodeURIComponent(
+          request.url.replace("attachment://", ""),
+        );
         if (fileName.includes("/") || fileName.includes("\\")) {
           callback({ error: -6 });
           return;

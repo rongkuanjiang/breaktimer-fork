@@ -99,6 +99,7 @@ See [./DEVELOPMENT.md](DEVELOPMENT.md).
   - Optional Sequential (Round Robin) mode cycles through the list in order without repeats until the list wraps.
 
 ### Multiple Messages Usage
+
 1. Open Settings > Breaks.
 2. Use the Messages list to Add, edit, or Remove entries.
 3. Choose Message Order: Random (default) or Sequential (round robin).

@@ -47,7 +47,9 @@ export default function TimeRange({
   const handleTimeChange = (isStart: boolean, date: Date) => {
     const minutes = getMinutesFromTime(date);
     if (isStart) {
+      // Setting start time
       if (minutes >= range.toMinutes) {
+        // Auto-adjust end time to be 30 minutes after new start time
         onChange({
           fromMinutes: minutes,
           toMinutes: minutes + 30,
@@ -59,13 +61,19 @@ export default function TimeRange({
         });
       }
     } else {
+      // Setting end time
       if (minutes <= range.fromMinutes) {
-        return;
+        // Auto-adjust start time to be 30 minutes before new end time
+        onChange({
+          fromMinutes: Math.max(0, minutes - 30),
+          toMinutes: minutes,
+        });
+      } else {
+        onChange({
+          ...range,
+          toMinutes: minutes,
+        });
       }
-      onChange({
-        ...range,
-        toMinutes: minutes,
-      });
     }
   };
 

@@ -10,7 +10,7 @@ export default function SettingsHeader(props: Props) {
   const { handleSave, showSave } = props;
 
   return (
-    <div className="border-b border-border bg-background">
+    <div className="border-b border-border bg-background sticky top-0 z-40">
       <nav className="flex items-center justify-between p-4 h-16 min-h-16">
         <div className="flex items-center">
           <h1 className="text-2xl font-bold text-foreground">Settings</h1>
@@ -26,13 +26,15 @@ export default function SettingsHeader(props: Props) {
       <div className="px-4 pb-4">
         <TabsList
           className={`grid w-full ${
-            processEnv.SNAP === undefined ? "grid-cols-4" : "grid-cols-3"
+            window.process?.env?.SNAP === undefined
+              ? "grid-cols-4"
+              : "grid-cols-3"
           }`}
         >
           <TabsTrigger value="break-behavior">Break Behavior</TabsTrigger>
           <TabsTrigger value="messages">Messages</TabsTrigger>
           <TabsTrigger value="customization">Customization</TabsTrigger>
-          {processEnv.SNAP === undefined && (
+          {window.process?.env?.SNAP === undefined && (
             <TabsTrigger value="system">System</TabsTrigger>
           )}
         </TabsList>

@@ -8,12 +8,17 @@ if (process.env.APPIMAGE) {
 
 const AppLauncher = new AutoLaunch(app);
 
-export function setAutoLauch(autoLaunch: boolean): void {
+export async function setAutoLaunch(autoLaunch: boolean): Promise<void> {
   if (process.env.NODE_ENV !== "development") {
-    if (autoLaunch) {
-      AppLauncher.enable();
-    } else {
-      AppLauncher.disable();
+    try {
+      if (autoLaunch) {
+        await AppLauncher.enable();
+      } else {
+        await AppLauncher.disable();
+      }
+    } catch (error) {
+      console.error("Failed to set auto-launch:", error);
+      throw error;
     }
   }
 }

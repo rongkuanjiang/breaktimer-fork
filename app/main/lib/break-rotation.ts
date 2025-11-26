@@ -17,7 +17,12 @@ export function sanitizeSequentialOrder(
 
   const seen = new Set<number>();
   for (const value of order) {
-    if (!Number.isInteger(value) || value < 0 || value >= length || seen.has(value)) {
+    if (
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value >= length ||
+      seen.has(value)
+    ) {
       return null;
     }
     seen.add(value);

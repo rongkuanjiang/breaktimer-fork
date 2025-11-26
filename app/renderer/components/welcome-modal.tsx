@@ -8,15 +8,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { useIpc } from "../contexts/ipc-context";
+
 interface WelcomeModalProps {
   open: boolean;
   onClose: () => void;
 }
 
 export default function WelcomeModal({ open, onClose }: WelcomeModalProps) {
+  const ipc = useIpc();
+
   const handleUnderstood = () => {
     // Mark app as initialized when user dismisses the modal
-    ipcRenderer.invokeSetAppInitialized();
+    ipc.invokeSetAppInitialized();
     onClose();
   };
 
